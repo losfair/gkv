@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package io.su3.gkv.mesh.proto;
+
+message DistributedLock {
+  int64 real_timestamp = 1;
+  string token = 2;
+}
+
+message MerkleLeaf {
+  bytes key = 1;
+  UniqueVersion version = 2;
+  bool deleted = 3;
+}
+
+message MerkleNode {
+  repeated MerkleChild children = 1;
+  MerkleLeaf leaf = 2;
+}
+
+message MerkleChild {
+  int32 index = 1;
+  bytes hash = 2;
+}
+
+message UniqueVersion {
+  int64 real_timestamp = 1;
+  bytes node_id = 2;
+  int64 op_seq = 3;
+}

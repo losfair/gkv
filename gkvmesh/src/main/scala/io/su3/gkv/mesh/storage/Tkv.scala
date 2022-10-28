@@ -1,34 +1,184 @@
 package io.su3.gkv.mesh.storage
 
-trait Tkv {
-  def beginTransaction(): TkvTxn = ???
-  def transact[T](f: TkvTxn => T): T = {
-    var txn = beginTransaction()
+import com.apple.foundationdb.Database;
+import com.apple.foundationdb.FDB;
+import com.apple.foundationdb.Transaction;
+import com.apple.foundationdb.FDBException;
+import com.apple.foundationdb.MutationType;
+import com.apple.foundationdb.tuple.Tuple;
+import com.typesafe.scalalogging.Logger
+import scala.collection.mutable.ArrayBuffer
+import java.nio.ByteBuffer
+import java.util.concurrent.Future
+import java.util.concurrent.CompletableFuture
 
-    try {
-      while (true) {
-        try {
-          val ret = f(txn)
-          txn.commit()
-          return ret
-        } catch {
-          case e: Exception =>
-            txn = txn.handleError(e)
-        }
-      }
-    } finally {
-      txn.close()
-    }
+object TkvKeyspace {
+  val distributedLockPrefix = "distributedLock"
+  val merkleTreeHashBufferPrefix = "mthb"
+  val merkleTreeStructurePrefix = "mts"
+  val dataPrefix = "data"
 
-    ???
+  def constructMerkleTreeStructureKey(
+      prefix: Seq[Byte]
+  ): Array[Byte] = {
+    Tuple
+      .from(
+        merkleTreeStructurePrefix,
+        prefix.length
+      )
+      .pack() ++ prefix
   }
 }
 
-trait TkvTxn {
-  def handleError(e: Exception): TkvTxn = throw e
-  def get(key: Array[Byte]): Option[Array[Byte]]
-  def put(key: Array[Byte], value: Array[Byte]): Unit
-  def delete(key: Array[Byte]): Unit
-  def commit(): Unit
-  def close(): Unit
+class Tkv(val prefix: Array[Byte]) {
+  val fdbApi: FDB = Tkv.forceInitFdb()
+  val db = Tkv.forceOpenFdb(fdbApi)
+
+  def beginTransaction(): TkvTxn = {
+    val txn = db.createTransaction()
+
+    new TkvTxn(this, txn)
+  }
+
+  def transact[T](f: TkvTxn => T): T = {
+    db.run(txn => {
+      val tkvTxn = new TkvTxn(this, txn)
+      f(tkvTxn)
+    })
+  }
+
+  def close(): Unit = {
+    db.close()
+  }
+}
+
+object Tkv {
+  val logger = Logger(getClass())
+
+  private def forceInitFdb(): FDB = {
+    val apiVersion = 630
+    try {
+      FDB.selectAPIVersion(apiVersion)
+    } catch {
+      case e: FDBException =>
+        if (e.getCode() == 2201) {
+          // "API version may be set only once"
+          logger.warn(
+            "FDB API version already set, patching"
+          )
+
+          val constructor = classOf[FDB].getDeclaredConstructor(classOf[Int])
+          constructor.setAccessible(true)
+          val api = constructor.newInstance(apiVersion)
+
+          val singleton = classOf[FDB].getDeclaredField("singleton")
+          singleton.setAccessible(true)
+          singleton.set(null, api)
+
+          api
+        } else {
+          throw e
+        }
+    }
+  }
+
+  private def forceOpenFdb(api: FDB): Database = {
+    try {
+      api.open()
+    } catch {
+      case e: FDBException =>
+        if (e.getCode() == 2009) {
+          // "Network can be configured only once"
+          logger.warn(
+            "FDB network already configured, patching"
+          )
+          val field = classOf[FDB].getDeclaredField("netStarted")
+          field.setAccessible(true)
+          field.set(api, true)
+          api.open()
+        } else {
+          throw e
+        }
+    }
+  }
+}
+
+object TkvTxn {
+  val metadataVersionKey = Array(0xff.toByte) ++ "/metadataVersion".getBytes()
+}
+
+class TkvTxn(
+    val tkv: Tkv,
+    private val fdbTxn: Transaction
+) {
+  def close(): Unit = {
+    fdbTxn.close()
+  }
+
+  def asyncGet(key: Array[Byte]): CompletableFuture[Option[Array[Byte]]] = {
+    fdbTxn.get(tkv.prefix ++ key).thenApply(Option(_))
+  }
+
+  def get(key: Array[Byte]): Option[Array[Byte]] = {
+    asyncGet(key).get()
+  }
+
+  def put(key: Array[Byte], value: Array[Byte]): Unit = {
+    fdbTxn.set(tkv.prefix ++ key, value)
+  }
+
+  def delete(key: Array[Byte]): Unit = {
+    fdbTxn.clear(tkv.prefix ++ key)
+  }
+
+  def snapshotRange(
+      begin: Array[Byte],
+      end: Array[Byte],
+      limit: Int
+  ): Seq[(Array[Byte], Array[Byte])] = {
+    val range =
+      fdbTxn.snapshot().getRange(tkv.prefix ++ begin, tkv.prefix ++ end, limit)
+    val iterator = range.iterator()
+    val ret = ArrayBuffer[(Array[Byte], Array[Byte])]()
+    while (iterator.hasNext()) {
+      val kv = iterator.next()
+      ret += ((
+        kv.getKey().slice(tkv.prefix.length, kv.getKey().length),
+        kv.getValue()
+      ))
+    }
+
+    ret.toSeq
+  }
+
+  def addReadConflictKeys(keys: Seq[Array[Byte]]): Unit = {
+    keys.foreach(key => {
+      fdbTxn.addReadConflictKey(tkv.prefix ++ key)
+    })
+  }
+
+  def commit(): Unit = {
+    fdbTxn.commit().join()
+  }
+
+  def getMetadataVersion(): Long = {
+    val value = fdbTxn.snapshot().get(TkvTxn.metadataVersionKey).join()
+    if (value == null) {
+      return 0
+    }
+    if (value.length < 8) {
+      return 0
+    }
+
+    ByteBuffer.allocate(8).put(value).getLong(0)
+  }
+
+  def updateMetadataVersion(): Unit = {
+    val param = Array.fill(14)(0.toByte)
+    fdbTxn.mutate(
+      MutationType.SET_VERSIONSTAMPED_VALUE,
+      TkvTxn.metadataVersionKey,
+      param
+    )
+  }
 }

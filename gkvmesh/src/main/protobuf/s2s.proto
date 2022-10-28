@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package io.su3.gkv.mesh.proto;
+
+import "persistence.proto";
+
+service Mesh {
+  rpc ExchangeMerkleTree(ExchangeMerkleTreeRequest)
+      returns (ExchangeMerkleTreeResponse);
+  rpc FetchLeaf(FetchLeafRequest) returns (FetchLeafResponse);
+  rpc PushLeaf(PushLeafRequest) returns (PushLeafResponse);
+}
+
+message ExchangeMerkleTreeRequest {
+  bytes prefix = 1;
+  bytes hash = 2;
+}
+
+message ExchangeMerkleTreeResponse {
+  bool identical = 1;
+  repeated bytes children = 2;
+}
+
+message FetchLeafRequest { repeated bytes hashes = 1; }
+
+message FetchLeafResponse { repeated Leaf entries = 1; }
+
+message PushLeafRequest { repeated Leaf entries = 1; }
+
+message PushLeafResponse {}
+
+message Leaf {
+  bytes key = 1;
+  bytes value = 2;
+  UniqueVersion version = 3;
+}
