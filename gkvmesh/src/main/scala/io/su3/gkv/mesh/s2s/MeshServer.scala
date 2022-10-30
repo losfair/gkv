@@ -13,6 +13,7 @@ import scala.concurrent.ExecutionContext
 import io.su3.gkv.mesh.storage.Tkv
 import io.grpc.{Server, ServerBuilder}
 import com.typesafe.scalalogging.Logger
+import io.su3.gkv.mesh.config.Config
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
@@ -38,9 +39,7 @@ class MeshServer(val tkv: Tkv) {
   private val logger = Logger(getClass())
 
   def start(): Unit = {
-    val port = Option(System.getProperty("gkvmesh.meshserver.port"))
-      .getOrElse(throw new Exception("gkvmesh.meshserver.port is not set"))
-      .toInt
+    val port = Config.meshserverPort
     server = Some(
       ServerBuilder
         .forPort(port)

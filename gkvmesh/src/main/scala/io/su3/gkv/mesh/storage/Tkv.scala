@@ -11,6 +11,11 @@ import scala.collection.mutable.ArrayBuffer
 import java.nio.ByteBuffer
 import java.util.concurrent.Future
 import java.util.concurrent.CompletableFuture
+import io.su3.gkv.mesh.config.Config
+import scala.util.control.NonFatal.apply
+import scala.util.control.NonFatal
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.CompletionException
 
 object TkvKeyspace {
   val distributedLockPrefix = "distributedLock"
@@ -30,7 +35,7 @@ object TkvKeyspace {
   }
 }
 
-class Tkv(val prefix: Array[Byte]) {
+class Tkv(val prefix: Array[Byte]) extends AutoCloseable {
   val fdbApi: FDB = Tkv.forceInitFdb()
   val db = Tkv.forceOpenFdb(fdbApi)
 
@@ -43,11 +48,29 @@ class Tkv(val prefix: Array[Byte]) {
   def transact[T](f: TkvTxn => T): T = {
     db.run(txn => {
       val tkvTxn = new TkvTxn(this, txn)
-      f(tkvTxn)
+      try {
+        f(tkvTxn)
+      } catch {
+        case e: Exception =>
+          // XXX: https://github.com/apple/foundationdb/pull/8623
+          if (
+            (e.isInstanceOf[CompletionException] || e
+              .isInstanceOf[ExecutionException]) && e
+              .getCause() != null
+          ) {
+            Tkv.logger.debug(
+              "txn error",
+              e.getCause()
+            )
+            throw e.getCause()
+          } else {
+            throw e
+          }
+      }
     })
   }
 
-  def close(): Unit = {
+  override def close(): Unit = {
     db.close()
   }
 }
@@ -84,7 +107,15 @@ object Tkv {
 
   private def forceOpenFdb(api: FDB): Database = {
     try {
-      api.open()
+      val options = api.options()
+
+      if (Config.fdbBuggify) {
+        options.setClientBuggifyEnable()
+        options.setClientBuggifySectionActivatedProbability(100)
+        logger.warn("FDB buggify enabled")
+      }
+
+      api.startNetwork()
     } catch {
       case e: FDBException =>
         if (e.getCode() == 2009) {
@@ -95,11 +126,12 @@ object Tkv {
           val field = classOf[FDB].getDeclaredField("netStarted")
           field.setAccessible(true)
           field.set(api, true)
-          api.open()
         } else {
           throw e
         }
     }
+
+    api.open()
   }
 }
 
@@ -110,8 +142,8 @@ object TkvTxn {
 class TkvTxn(
     val tkv: Tkv,
     private val fdbTxn: Transaction
-) {
-  def close(): Unit = {
+) extends AutoCloseable {
+  override def close(): Unit = {
     fdbTxn.close()
   }
 

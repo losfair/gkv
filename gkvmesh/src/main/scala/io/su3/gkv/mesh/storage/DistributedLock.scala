@@ -74,7 +74,7 @@ class DistributedLock private (
     val tkv: Tkv,
     val name: String,
     val token: String
-) {
+) extends AutoCloseable {
   private var renewTask: Option[Thread] = None
 
   private def startRenewTask(): Unit = {
@@ -104,7 +104,7 @@ class DistributedLock private (
     }))
   }
 
-  def close(): Unit = {
+  override def close(): Unit = {
     renewTask match {
       case Some(x) =>
         x.interrupt()

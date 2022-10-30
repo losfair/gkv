@@ -11,7 +11,7 @@ import com.google.protobuf.ByteString
 import com.typesafe.scalalogging.Logger
 import org.apache.commons.codec.binary.Hex
 import io.su3.gkv.mesh.util.UniqueVersionUtil
-import scala.math.Ordering.Implicits._
+import io.su3.gkv.mesh.util.BytesUtil
 
 object MerkleTreeIncrementalBuilder {
   private val lastHash = Array.fill(32)(0xff.toByte)
@@ -25,20 +25,24 @@ object MerkleTreeIncrementalBuilder {
     while (true) {
       hashCursor match {
         case Some(x) =>
-          var newRoot: Option[Array[Byte]] = None
+          var newRoot: Option[MerkleNode] = None
           val result = lock.tkv.transact { txn =>
             lock.validate(txn)
             val result = runIncrementalBuildOnce(txn, x, 100)
-            newRoot = txn.get(
-              TkvKeyspace.constructMerkleTreeStructureKey(Seq())
-            )
+            newRoot = txn
+              .get(
+                TkvKeyspace.constructMerkleTreeStructureKey(Seq())
+              )
+              .map { x => MerkleNode.parseFrom(x) }
             result
           }
           logger.info(
             "from: {} numKeys: {} newRoot: {}",
             Hex.encodeHexString(x),
             result.numKeys,
-            newRoot.map { x => Hex.encodeHexString(x) }.getOrElse("-")
+            newRoot
+              .map { x => Hex.encodeHexString(MerkleTreeUtil.hashNode(x)) }
+              .getOrElse("-")
           )
           hashCursor = result.nextCursor
         case None => return
@@ -66,7 +70,7 @@ object MerkleTreeIncrementalBuilder {
 
     val dirtyNodeFutures =
       HashMap[Seq[Byte], CompletableFuture[Option[MerkleNode]]]()
-    for (i <- Range.inclusive(32, 0)) {
+    for (i <- Range.inclusive(32, 0, -1)) {
       for ((k, v) <- range) {
         val hashPrefix =
           k.drop(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix.length)
@@ -102,14 +106,17 @@ object MerkleTreeIncrementalBuilder {
         val current = dirtyNodes.get(hash).get
 
         // Only update if the incoming version is newer
+        val incomingVersion = UniqueVersionUtil
+          .serializeUniqueVersion(leaf.version.get)
+        val currentVersion = UniqueVersionUtil
+          .serializeUniqueVersion(
+            current.get.leaf.get.version.get
+          )
         if (
-          current.isDefined && UniqueVersionUtil
-            .serializeUniqueVersion(leaf.version.get)
-            .toSeq <= UniqueVersionUtil
-            .serializeUniqueVersion(
-              current.get.leaf.get.version.get
-            )
-            .toSeq
+          current.isDefined && BytesUtil.compare(
+            incomingVersion,
+            currentVersion
+          ) <= 0
         ) {
           None
         } else {
@@ -123,7 +130,7 @@ object MerkleTreeIncrementalBuilder {
         }
     }.toMap
 
-    for (i <- Range.inclusive(32, 0)) {
+    for (i <- Range.inclusive(32, 0, -1)) {
       val children =
         HashMap[Seq[Byte], HashMap[Int, MerkleChild]]()
       for ((k, v) <- propagatedUpdates) {
@@ -132,7 +139,7 @@ object MerkleTreeIncrementalBuilder {
 
         if (i != 0) {
           val hashPrefix = k.take(i - 1)
-          val index = k(i - 1)
+          val index = k(i - 1).toInt & 0xff
           val current = dirtyNodes.get(hashPrefix).get
 
           val map = children.getOrElseUpdate(
@@ -142,7 +149,7 @@ object MerkleTreeIncrementalBuilder {
               .getOrElse(HashMap())
           )
           val child = MerkleChild(
-            index = index.toInt,
+            index = index,
             hash = ByteString.copyFrom(MerkleTreeUtil.hashNode(v))
           )
           map.put(child.index, child)

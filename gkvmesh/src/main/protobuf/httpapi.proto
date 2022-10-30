@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package io.su3.gkv.mesh.proto;
+
+message KvGetRequest { bytes key = 1; }
+
+message KvGetResponse {
+  bytes value = 1;
+  bool exists = 2;
+}
+
+message KvSetRequest {
+  bytes key = 1;
+  bytes value = 2;
+  bool delete = 3;
+}
+
+message KvSetResponse {}
