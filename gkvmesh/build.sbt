@@ -23,3 +23,8 @@ Compile / PB.targets := Seq(
 )
 
 scalacOptions ++= Seq("-deprecation")
+
+assemblyMergeStrategy in assembly := {
+ case PathList("META-INF", _*) => MergeStrategy.discard
+ case _                        => MergeStrategy.first
+}

@@ -11,9 +11,10 @@ import scala.concurrent.Future
 import java.util.concurrent.Executors
 import scala.concurrent.ExecutionContext
 import io.su3.gkv.mesh.storage.Tkv
-import io.grpc.{Server, ServerBuilder}
+import io.grpc.Server
 import com.typesafe.scalalogging.Logger
 import io.su3.gkv.mesh.config.Config
+import io.grpc.netty.NettyServerBuilder
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
@@ -41,7 +42,7 @@ class MeshServer(val tkv: Tkv) {
   def start(): Unit = {
     val port = Config.meshserverPort
     server = Some(
-      ServerBuilder
+      NettyServerBuilder
         .forPort(port)
         .addService(
           MeshGrpc.bindService(new MeshImpl(tkv), defaultExecutionContext)
