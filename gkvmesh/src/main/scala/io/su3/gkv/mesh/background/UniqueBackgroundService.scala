@@ -13,24 +13,46 @@ trait UniqueBackgroundService {
 object UniqueBackgroundService {
   val logger = Logger(getClass())
 
+  def takeover[T](
+      tkv: Tkv,
+      service: UniqueBackgroundService,
+      priority: Int
+  )(f: DistributedLock => T): T = {
+    val lock = DistributedLock.acquire(tkv, service.serviceName, priority)
+    logger.info(
+      "Acquired lock, token: {}",
+      lock.token
+    )
+
+    try {
+      f(lock)
+    } finally {
+      try {
+        tkv.transact { txn => lock.release(txn) }
+      } catch {
+        case NonFatal(e) =>
+          logger.error(
+            "Failed to release lock",
+            e
+          )
+      }
+
+      lock.close()
+    }
+  }
+
   def run(tkv: Tkv, service: UniqueBackgroundService): Unit = {
     val serviceName = service.serviceName
 
     while (true) {
-      val lock = DistributedLock.acquire(tkv, serviceName)
-      logger.info(
-        "Acquired lock for service {}, token: {}",
-        serviceName,
-        lock.token
-      )
       try {
-        service.runForever(lock)
-        throw new RuntimeException("runForever() returned")
+        takeover(tkv, service, 0) { lock =>
+          service.runForever(lock)
+          throw new RuntimeException("runForever() returned")
+        }
       } catch {
         case NonFatal(e) =>
-          logger.error("Service {} failed", serviceName, e)
-      } finally {
-        lock.close()
+          logger.error("Service failed", e)
       }
 
       Thread.sleep(1000)

@@ -5,25 +5,25 @@ package io.su3.gkv.mesh.proto;
 import "persistence.proto";
 
 service Mesh {
-  rpc ExchangeMerkleTree(ExchangeMerkleTreeRequest)
-      returns (ExchangeMerkleTreeResponse);
-  rpc FetchLeaf(FetchLeafRequest) returns (FetchLeafResponse);
+  rpc PullMerkleTree(PullMerkleTreeRequest)
+      returns (PullMerkleTreeResponse);
+  rpc PullLeaf(PullLeafRequest) returns (PullLeafResponse);
   rpc PushLeaf(PushLeafRequest) returns (PushLeafResponse);
 }
 
-message ExchangeMerkleTreeRequest {
+message PullMerkleTreeRequest {
   bytes prefix = 1;
   bytes hash = 2;
 }
 
-message ExchangeMerkleTreeResponse {
+message PullMerkleTreeResponse {
   bool identical = 1;
   repeated bytes children = 2;
 }
 
-message FetchLeafRequest { repeated bytes hashes = 1; }
+message PullLeafRequest { repeated bytes hashes = 1; }
 
-message FetchLeafResponse { repeated Leaf entries = 1; }
+message PullLeafResponse { repeated Leaf entries = 1; }
 
 message PushLeafRequest { repeated Leaf entries = 1; }
 

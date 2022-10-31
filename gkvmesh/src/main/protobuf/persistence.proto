@@ -5,6 +5,7 @@ package io.su3.gkv.mesh.proto;
 message DistributedLock {
   int64 real_timestamp = 1;
   string token = 2;
+  int32 priority = 3;
 }
 
 message MerkleLeaf {

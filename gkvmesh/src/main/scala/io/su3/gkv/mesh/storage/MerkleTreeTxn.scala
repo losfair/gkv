@@ -10,6 +10,22 @@ class MerkleTreeTxn(txn: TkvTxn) {
     txn.get(MerkleTreeTxn.rawDataPrefix ++ key)
   }
 
+  def range(
+      start: Array[Byte],
+      end: Array[Byte],
+      limit: Int
+  ): Seq[(Array[Byte], Array[Byte])] = {
+    txn
+      .snapshotRange(
+        MerkleTreeTxn.rawDataPrefix ++ start,
+        MerkleTreeTxn.rawDataPrefix ++ end,
+        limit
+      )
+      .map { x =>
+        (x._1.drop(MerkleTreeTxn.rawDataPrefix.length), x._2)
+      }
+  }
+
   def put(key: Array[Byte], value: Array[Byte]): Unit = {
     txn.put(MerkleTreeTxn.rawDataPrefix ++ key, value)
     putHashBuffer(key)

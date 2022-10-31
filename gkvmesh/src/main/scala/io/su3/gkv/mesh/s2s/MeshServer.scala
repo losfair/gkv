@@ -1,10 +1,10 @@
 package io.su3.gkv.mesh.s2s
 
 import io.su3.gkv.mesh.proto.s2s.MeshGrpc
-import io.su3.gkv.mesh.proto.s2s.FetchLeafResponse
-import io.su3.gkv.mesh.proto.s2s.ExchangeMerkleTreeResponse
-import io.su3.gkv.mesh.proto.s2s.ExchangeMerkleTreeRequest
-import io.su3.gkv.mesh.proto.s2s.FetchLeafRequest
+import io.su3.gkv.mesh.proto.s2s.PullLeafResponse
+import io.su3.gkv.mesh.proto.s2s.PullMerkleTreeResponse
+import io.su3.gkv.mesh.proto.s2s.PullMerkleTreeRequest
+import io.su3.gkv.mesh.proto.s2s.PullLeafRequest
 import io.su3.gkv.mesh.proto.s2s.PushLeafRequest
 import io.su3.gkv.mesh.proto.s2s.PushLeafResponse
 import scala.concurrent.Future
@@ -23,13 +23,13 @@ private implicit val defaultExecutionContext: ExecutionContext =
 
 class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
 
-  override def exchangeMerkleTree(
-      request: ExchangeMerkleTreeRequest
-  ): Future[ExchangeMerkleTreeResponse] = Future {
+  override def pullMerkleTree(
+      request: PullMerkleTreeRequest
+  ): Future[PullMerkleTreeResponse] = Future {
     ???
   }
 
-  override def fetchLeaf(request: FetchLeafRequest): Future[FetchLeafResponse] =
+  override def pullLeaf(request: PullLeafRequest): Future[PullLeafResponse] =
     Future { ??? }
   override def pushLeaf(request: PushLeafRequest): Future[PushLeafResponse] =
     Future { ??? }

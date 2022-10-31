@@ -17,7 +17,8 @@ object DistributedLock {
   private def tryAcquire(
       tkv: Tkv,
       txn: TkvTxn,
-      name: String
+      name: String,
+      priority: Int
   ): Option[DistributedLock] = {
     val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
     val currentTime = System.currentTimeMillis()
@@ -32,7 +33,7 @@ object DistributedLock {
             String(value)
           )
         val timeDiff = currentTime - lock.realTimestamp
-        if (timeDiff < lockTimeoutMs) {
+        if (timeDiff < lockTimeoutMs && lock.priority <= priority) {
           return None // lock held by another process
         }
       case None =>
@@ -41,15 +42,19 @@ object DistributedLock {
     // Acquire the lock!
     val token = java.util.UUID.randomUUID().toString()
     val lock = io.su3.gkv.mesh.proto.persistence
-      .DistributedLock(realTimestamp = currentTime, token)
+      .DistributedLock(
+        realTimestamp = currentTime,
+        token = token,
+        priority = priority
+      )
     txn.put(kvKey, scalapb.json4s.JsonFormat.toJsonString(lock).getBytes())
     Some(DistributedLock(tkv, name, token))
   }
 
-  def acquire(tkv: Tkv, name: String): DistributedLock = {
+  def acquire(tkv: Tkv, name: String, priority: Int = 0): DistributedLock = {
     while (true) {
       try {
-        val ret = tkv.transact { txn => tryAcquire(tkv, txn, name) }
+        val ret = tkv.transact { txn => tryAcquire(tkv, txn, name, priority) }
         ret match {
           case Some(lock) =>
             lock.startRenewTask()
@@ -76,6 +81,7 @@ class DistributedLock private (
     val token: String
 ) extends AutoCloseable {
   private var renewTask: Option[Thread] = None
+  private val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
 
   private def startRenewTask(): Unit = {
     renewTask = Some(Thread.startVirtualThread(new Runnable {
@@ -113,10 +119,13 @@ class DistributedLock private (
     }
   }
 
+  def release(txn: TkvTxn): Unit = {
+    validate(txn)
+    txn.delete(kvKey)
+  }
+
   def validate(txn: TkvTxn): Unit = {
-    val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
-    val current =
-      txn.get(kvKey)
+    val current = txn.get(kvKey)
 
     current match {
       case Some(value) =>
@@ -135,7 +144,6 @@ class DistributedLock private (
   private def renewOnce(): Unit = {
     tkv.transact { txn =>
       validate(txn)
-      val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
       val currentTime = System.currentTimeMillis()
       val lock = io.su3.gkv.mesh.proto.persistence
         .DistributedLock(realTimestamp = currentTime, token)
