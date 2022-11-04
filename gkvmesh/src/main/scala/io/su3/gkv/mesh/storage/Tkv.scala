@@ -150,6 +150,10 @@ class TkvTxn(
     fdbTxn.close()
   }
 
+  def setBatchPriority(): Unit = {
+    fdbTxn.options().setPriorityBatch()
+  }
+
   def asyncGet(
       key: Array[Byte],
       mode: TkvTxnReadMode = TkvTxnReadMode.Serializable

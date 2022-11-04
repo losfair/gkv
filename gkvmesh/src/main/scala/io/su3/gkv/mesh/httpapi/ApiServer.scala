@@ -47,6 +47,7 @@ import io.su3.gkv.mesh.background.UniqueBackgroundService
 import io.su3.gkv.mesh.s2s.ActiveAntiEntropyService
 import io.su3.gkv.mesh.proto.httpapi.AaePullRequest
 import io.su3.gkv.mesh.proto.httpapi.AaePullResponse
+import java.net.SocketException
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
@@ -271,7 +272,11 @@ private class ApiServerHandler(server: ApiServer)
       ctx: ChannelHandlerContext,
       cause: Throwable
   ): Unit = {
-    ApiServer.logger.error("ApiServer exception", cause)
+    cause match {
+      case _: SocketException =>
+      case _ =>
+        ApiServer.logger.error("ApiServer exception", cause)
+    }
     ctx.close()
   }
 }

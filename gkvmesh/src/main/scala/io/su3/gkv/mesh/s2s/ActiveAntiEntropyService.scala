@@ -60,7 +60,7 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
       .build()
     val stub = MeshGrpc.blockingStub(channel)
 
-    val wg = WorkerGroup("aae-pull-" + peerAddress, 16)
+    val wg = WorkerGroup("aae-pull-" + peerAddress, 256)
     try {
       PeerPuller(lock, wg, stub).pullOnce(Array.emptyByteArray, None)
       wg.waitUntilIdle()

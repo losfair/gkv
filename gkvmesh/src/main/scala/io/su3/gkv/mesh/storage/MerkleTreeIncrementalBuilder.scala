@@ -31,6 +31,7 @@ object MerkleTreeIncrementalBuilder {
         case Some(x) =>
           var newRoot: Option[MerkleNode] = None
           val result = lock.tkv.transact { txn =>
+            txn.setBatchPriority()
             lock.validate(txn)
             val result = runIncrementalBuildOnce(txn, x, 1000)
             newRoot = txn

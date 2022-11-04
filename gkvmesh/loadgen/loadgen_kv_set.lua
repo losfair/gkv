@@ -16,7 +16,7 @@ end
 wrk.method = "POST"
 wrk.headers["Content-type"] = "application/json"
 
-local keyCount = 10000
+local keyCount = 100000
 local valueCount = 1000
 local keys = {}
 local values = {}
