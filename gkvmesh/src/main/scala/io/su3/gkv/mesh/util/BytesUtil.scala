@@ -14,4 +14,9 @@ object BytesUtil {
 
     xe.hasNext.compare(ye.hasNext)
   }
+
+  class UnsignedBytesOrdering[T[Byte] <: Iterable[Byte]] extends Ordering[T[Byte]] {
+    override def compare(x: T[Byte], y: T[Byte]): Int =
+      BytesUtil.compare(x, y)
+  }
 }

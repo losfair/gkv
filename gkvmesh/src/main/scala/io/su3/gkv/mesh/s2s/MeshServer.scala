@@ -14,6 +14,14 @@ import io.su3.gkv.mesh.storage.Tkv
 import io.grpc.Server
 import com.typesafe.scalalogging.Logger
 import io.su3.gkv.mesh.config.Config
+import io.su3.gkv.mesh.storage.TkvKeyspace
+import io.su3.gkv.mesh.proto.persistence.MerkleNode
+import io.su3.gkv.mesh.util.MerkleTreeUtil
+import java.util.concurrent.CompletableFuture
+import io.su3.gkv.mesh.storage.MerkleTreeTxn
+import io.su3.gkv.mesh.proto.s2s.Leaf
+import com.google.protobuf.ByteString
+import io.grpc.ServerBuilder
 import io.grpc.netty.NettyServerBuilder
 
 private implicit val defaultExecutionContext: ExecutionContext =
@@ -26,11 +34,59 @@ class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
   override def pullMerkleTree(
       request: PullMerkleTreeRequest
   ): Future[PullMerkleTreeResponse] = Future {
-    ???
+    tkv.transact { txn =>
+      val node = txn
+        .get(
+          TkvKeyspace.constructMerkleTreeStructureKey(
+            request.prefix.toByteArray().toSeq
+          )
+        )
+        .map(MerkleNode.parseFrom(_))
+        .getOrElse(MerkleNode())
+      val actualHash = MerkleTreeUtil.hashNode(node)
+
+      if (actualHash.sameElements(request.hash.toByteArray())) {
+        PullMerkleTreeResponse(identical = true)
+      } else {
+        PullMerkleTreeResponse(identical = false, children = node.children)
+      }
+    }
   }
 
   override def pullLeaf(request: PullLeafRequest): Future[PullLeafResponse] =
-    Future { ??? }
+    Future {
+      tkv.transact { txn =>
+        val entries = request.hashes
+          .map { hash =>
+            val key = TkvKeyspace.constructMerkleTreeStructureKey(
+              hash.toByteArray().toSeq
+            )
+            val value = txn
+              .asyncGet(key)
+              .thenCompose(
+                _.map(MerkleNode.parseFrom(_))
+                  .flatMap(_.leaf)
+                  .map { leaf =>
+                    val dataKey =
+                      MerkleTreeTxn.rawDataPrefix ++ leaf.key.toByteArray()
+                    txn
+                      .asyncGet(dataKey)
+                      .thenApply(_.map { dataValue =>
+                        Leaf(
+                          key = leaf.key,
+                          value = ByteString.copyFrom(dataValue),
+                          version = leaf.version
+                        )
+                      })
+                  }
+                  .getOrElse(CompletableFuture.completedFuture(None))
+              )
+            value
+          }
+          .flatMap(_.get())
+        PullLeafResponse(entries = entries)
+      }
+    }
   override def pushLeaf(request: PushLeafRequest): Future[PushLeafResponse] =
     Future { ??? }
 }

@@ -43,6 +43,10 @@ import io.su3.gkv.mesh.proto.httpapi.KvSetResponse
 import com.fasterxml.jackson.core.JsonParseException
 import java.nio.charset.Charset
 import com.fasterxml.jackson.core.JsonProcessingException
+import io.su3.gkv.mesh.background.UniqueBackgroundService
+import io.su3.gkv.mesh.s2s.ActiveAntiEntropyService
+import io.su3.gkv.mesh.proto.httpapi.AaePullRequest
+import io.su3.gkv.mesh.proto.httpapi.AaePullResponse
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
@@ -142,6 +146,27 @@ class ApiServer(val tkv: Tkv) {
           HttpResponseStatus.OK,
           Unpooled.wrappedBuffer(resBody.getBytes())
         )
+      case "/control/aae/pull" => {
+        // AAE pull from peer
+        Thread.currentThread().setName("aae-pull")
+        val reqBody = scalapb.json4s.JsonFormat
+          .fromJsonString[AaePullRequest](
+            req.content().toString(Charset.defaultCharset())
+          )
+        val lock =
+          UniqueBackgroundService.takeover(tkv, ActiveAntiEntropyService, -1) {
+            lock =>
+              ActiveAntiEntropyService.runOnce(lock, Seq(reqBody.peer))
+          }
+        val resBody = scalapb.json4s.JsonFormat.toJsonString(
+          AaePullResponse()
+        )
+        DefaultFullHttpResponse(
+          req.protocolVersion(),
+          HttpResponseStatus.OK,
+          Unpooled.wrappedBuffer(resBody.getBytes())
+        )
+      }
       case _ =>
         DefaultFullHttpResponse(
           req.protocolVersion(),

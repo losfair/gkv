@@ -12,6 +12,10 @@ import com.typesafe.scalalogging.Logger
 import org.apache.commons.codec.binary.Hex
 import io.su3.gkv.mesh.util.UniqueVersionUtil
 import io.su3.gkv.mesh.util.BytesUtil
+import scala.collection.mutable.Queue
+import scala.collection.mutable.HashSet
+import io.su3.gkv.mesh.util.BytesUtil.UnsignedBytesOrdering
+import scala.collection.mutable.TreeSet
 
 object MerkleTreeIncrementalBuilder {
   private val lastHash = Array.fill(32)(0xff.toByte)
@@ -28,10 +32,11 @@ object MerkleTreeIncrementalBuilder {
           var newRoot: Option[MerkleNode] = None
           val result = lock.tkv.transact { txn =>
             lock.validate(txn)
-            val result = runIncrementalBuildOnce(txn, x, 100)
+            val result = runIncrementalBuildOnce(txn, x, 1000)
             newRoot = txn
               .get(
-                TkvKeyspace.constructMerkleTreeStructureKey(Seq())
+                TkvKeyspace.constructMerkleTreeStructureKey(Seq()),
+                TkvTxnReadMode.Snapshot
               )
               .map { x => MerkleNode.parseFrom(x) }
             result
@@ -68,33 +73,7 @@ object MerkleTreeIncrementalBuilder {
       return BuildResult(numKeys = 0, nextCursor = None)
     }
 
-    val dirtyNodeFutures =
-      HashMap[Seq[Byte], CompletableFuture[Option[MerkleNode]]]()
-    for (i <- Range.inclusive(32, 0, -1)) {
-      for ((k, v) <- range) {
-        val hashPrefix =
-          k.drop(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix.length)
-            .take(i)
-            .toSeq
-        if (!dirtyNodeFutures.contains(hashPrefix)) {
-          val fut =
-            txn.asyncGet(
-              TkvKeyspace.constructMerkleTreeStructureKey(hashPrefix)
-            )
-          dirtyNodeFutures.put(
-            hashPrefix,
-            fut.thenApply { x =>
-              x.map { x =>
-                MerkleNode.parseFrom(x)
-              }
-            }
-          )
-        }
-      }
-    }
-
-    val dirtyNodes =
-      dirtyNodeFutures.iterator.map({ x => (x._1, x._2.join()) }).toMap
+    val dirtyNodes = loadAndExpandDirtyNodes(txn, range)
 
     var propagatedUpdates: Map[Seq[Byte], MerkleNode] = range.flatMap {
       case (k, v) =>
@@ -108,12 +87,16 @@ object MerkleTreeIncrementalBuilder {
         // Only update if the incoming version is newer
         val incomingVersion = UniqueVersionUtil
           .serializeUniqueVersion(leaf.version.get)
-        val currentVersion = UniqueVersionUtil
-          .serializeUniqueVersion(
-            current.get.leaf.get.version.get
-          )
+        val currentVersion = current
+          .map { n =>
+            UniqueVersionUtil
+              .serializeUniqueVersion(
+                n.leaf.get.version.get
+              )
+          }
+          .getOrElse(Array.emptyByteArray)
         if (
-          current.isDefined && BytesUtil.compare(
+          BytesUtil.compare(
             incomingVersion,
             currentVersion
           ) <= 0
@@ -132,11 +115,10 @@ object MerkleTreeIncrementalBuilder {
 
     for (i <- Range.inclusive(32, 0, -1)) {
       val children =
-        HashMap[Seq[Byte], HashMap[Int, MerkleChild]]()
+        HashMap[Seq[Byte], HashMap[Int, (MerkleChild, Option[MerkleNode])]]()
+
       for ((k, v) <- propagatedUpdates) {
         assert(k.length == i)
-        txn.put(TkvKeyspace.constructMerkleTreeStructureKey(k), v.toByteArray)
-
         if (i != 0) {
           val hashPrefix = k.take(i - 1)
           val index = k(i - 1).toInt & 0xff
@@ -145,24 +127,53 @@ object MerkleTreeIncrementalBuilder {
           val map = children.getOrElseUpdate(
             hashPrefix,
             current
-              .map { x => HashMap.from(x.children.map { c => (c.index, c) }) }
+              .map { x =>
+                HashMap.from(x.children.map { c => (c.index, (c, None)) })
+              }
               .getOrElse(HashMap())
           )
           val child = MerkleChild(
             index = index,
             hash = ByteString.copyFrom(MerkleTreeUtil.hashNode(v))
           )
-          map.put(child.index, child)
+          map.put(child.index, (child, Some(v)))
+        } else {
+          // Root node
+          txn.put(
+            TkvKeyspace.constructMerkleTreeStructureKey(k),
+            v.toByteArray
+          )
         }
       }
+
+      // XXX: Side effect: txn.put
       propagatedUpdates = children.map { case (k, v) =>
-        (k, MerkleNode(children = v.values.toSeq))
+        val canCompress = i != 32 && v.values.size == 1
+        (
+          k,
+          MerkleNode(children = v.values.map {
+            case (child, Some(node)) =>
+              if (canCompress) {
+                child.copy(inlineNode = Some(node))
+              } else {
+                txn.put(
+                  TkvKeyspace.constructMerkleTreeStructureKey(
+                    k :+ child.index.toByte
+                  ),
+                  node.toByteArray
+                )
+                child
+              }
+            case (child, None) => child
+          }.toSeq)
+        )
       }.toMap
     }
 
-    txn.addReadConflictKeys(range.map(_._1))
-    for ((k, _) <- range) {
-      txn.delete(k)
+    // Atomic compare-and-delete during commit.
+    // This prevents conflict with online transactions.
+    for ((k, v) <- range) {
+      txn.compareAndDelete(k, v)
     }
 
     BuildResult(
@@ -172,5 +183,106 @@ object MerkleTreeIncrementalBuilder {
           .drop(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix.size)
       )
     )
+  }
+
+  private def loadAndExpandDirtyNodes(
+      txn: TkvTxn,
+      range: Seq[(Array[Byte], Array[Byte])]
+  ): Map[Seq[Byte], Option[MerkleNode]] = {
+    val pendingDataKeys = HashSet[Seq[Byte]]()
+    for ((k, _) <- range) {
+      pendingDataKeys.add(
+        k.drop(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix.length).toSeq
+      )
+    }
+
+    val dirtyNodes = HashMap[Seq[Byte], Option[MerkleNode]]()
+    var txnGetCount = 0
+
+    for (j <- Range.inclusive(0, 24, 8)) {
+      val dirtyNodeFutures =
+        HashMap[Seq[Byte], CompletableFuture[Option[MerkleNode]]]()
+      for (i <- Range.inclusive(j, if(j == 24) j + 8 else j + 7, 1)) {
+        for (k <- pendingDataKeys) {
+          val hashPrefix = k.take(i).toSeq
+          if (
+            !dirtyNodes.contains(hashPrefix) &&
+            !dirtyNodeFutures.contains(hashPrefix)
+          ) {
+            val fut =
+              txn.asyncGet(
+                TkvKeyspace.constructMerkleTreeStructureKey(hashPrefix),
+                TkvTxnReadMode.Snapshot
+              )
+            dirtyNodeFutures.put(
+              hashPrefix,
+              fut.thenApply { x =>
+                x.map { x =>
+                  MerkleNode.parseFrom(x)
+                }
+              }
+            )
+            txnGetCount += 1
+          }
+        }
+      }
+      val localDirtyNodes =
+        HashMap.from(dirtyNodeFutures.iterator.map({ x =>
+          (x._1, x._2.join())
+        }))
+      expandDirtyNodes(localDirtyNodes)
+      expandEmptyDirtyNodes(localDirtyNodes, pendingDataKeys)
+      dirtyNodes ++= localDirtyNodes
+    }
+
+    logger.debug("loadAndExpandDirtyNodes: txnGetCount: {}", txnGetCount)
+    dirtyNodes.toMap
+  }
+
+  private def expandEmptyDirtyNodes(
+      nodes: HashMap[Seq[Byte], Option[MerkleNode]],
+      pendingDataKeys: HashSet[Seq[Byte]]
+  ): Unit = {
+    val pendingDataKeysTree: TreeSet[Seq[Byte]] = TreeSet
+      .from(pendingDataKeys)(UnsignedBytesOrdering())
+
+    for ((k, v) <- nodes.iterator.filter(_._2.isEmpty)) {
+      val it =
+        pendingDataKeysTree.iteratorFrom(k).takeWhile(_.startsWith(k))
+      val pendingDelete = ArrayBuffer[Seq[Byte]]()
+      while (it.hasNext) {
+        val next: Seq[Byte] = it.next()
+        for (i <- Range.inclusive(k.length, 32, 1)) {
+          nodes.put(next.take(i), None)
+        }
+        pendingDelete += next
+      }
+      for (i <- pendingDelete) {
+        pendingDataKeys.remove(i)
+        pendingDataKeysTree.remove(i)
+      }
+    }
+  }
+
+  private def expandDirtyNodes(
+      nodes: HashMap[Seq[Byte], Option[MerkleNode]]
+  ): Unit = {
+    val queue = Queue[(Seq[Byte], MerkleNode)]()
+    for ((k, v) <- nodes) {
+      v.foreach { n =>
+        queue.enqueue((k, n))
+      }
+    }
+
+    while (!queue.isEmpty) {
+      val (k, v) = queue.dequeue()
+      for (child <- v.children) {
+        child.inlineNode.foreach { n =>
+          val extendedPrefix = k :+ child.index.toByte
+          nodes.put(extendedPrefix, Some(n))
+          queue.enqueue((extendedPrefix, n))
+        }
+      }
+    }
   }
 }

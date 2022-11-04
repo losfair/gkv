@@ -35,7 +35,11 @@ private def guard[T, R](init: => T, close: T => Unit)(body: T => R): R = {
   org.slf4j.LoggerFactory
     .getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
     .asInstanceOf[ch.qos.logback.classic.Logger]
-    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.logLevel))
+    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.globalLogLevel))
+  org.slf4j.LoggerFactory
+    .getLogger("io.su3.gkv.mesh")
+    .asInstanceOf[ch.qos.logback.classic.Logger]
+    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.localLogLevel))
 
   try {
     guard(Tkv(Config.tkvPrefix), _.close()) { tkv =>

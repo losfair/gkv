@@ -16,6 +16,9 @@ import scala.util.control.NonFatal.apply
 import scala.util.control.NonFatal
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.CompletionException
+import scala.util.Try
+import scala.util.Success
+import scala.util.Failure
 
 object TkvKeyspace {
   val distributedLockPrefix = "distributedLock"
@@ -46,28 +49,21 @@ class Tkv(val prefix: Array[Byte]) extends AutoCloseable {
   }
 
   def transact[T](f: TkvTxn => T): T = {
-    db.run(txn => {
+    Try(db.run(txn => {
       val tkvTxn = new TkvTxn(this, txn)
-      try {
-        f(tkvTxn)
-      } catch {
-        case e: Exception =>
-          // XXX: https://github.com/apple/foundationdb/pull/8623
-          if (
-            (e.isInstanceOf[CompletionException] || e
-              .isInstanceOf[ExecutionException]) && e
-              .getCause() != null
-          ) {
-            Tkv.logger.debug(
-              "txn error",
-              e.getCause()
-            )
-            throw e.getCause()
-          } else {
-            throw e
-          }
+      // XXX: https://github.com/apple/foundationdb/pull/8623
+      Try(f(tkvTxn)) match {
+        case Success(x) => x
+        case Failure(err: ExecutionException) if err.getCause() != null =>
+          throw err.getCause()
+        case Failure(err) => throw err
       }
-    })
+    })) match {
+      case Success(x) => x
+      case Failure(err: CompletionException) if err.getCause() != null =>
+        throw err.getCause()
+      case Failure(err) => throw err
+    }
   }
 
   override def close(): Unit = {
@@ -135,6 +131,13 @@ object Tkv {
   }
 }
 
+sealed trait TkvTxnReadMode
+
+object TkvTxnReadMode {
+  case object Snapshot extends TkvTxnReadMode
+  case object Serializable extends TkvTxnReadMode
+}
+
 object TkvTxn {
   val metadataVersionKey = Array(0xff.toByte) ++ "/metadataVersion".getBytes()
 }
@@ -147,12 +150,21 @@ class TkvTxn(
     fdbTxn.close()
   }
 
-  def asyncGet(key: Array[Byte]): CompletableFuture[Option[Array[Byte]]] = {
-    fdbTxn.get(tkv.prefix ++ key).thenApply(Option(_))
+  def asyncGet(
+      key: Array[Byte],
+      mode: TkvTxnReadMode = TkvTxnReadMode.Serializable
+  ): CompletableFuture[Option[Array[Byte]]] = {
+    (mode match {
+      case TkvTxnReadMode.Serializable => fdbTxn.get(tkv.prefix ++ key)
+      case TkvTxnReadMode.Snapshot => fdbTxn.snapshot().get(tkv.prefix ++ key)
+    }).thenApply(Option(_))
   }
 
-  def get(key: Array[Byte]): Option[Array[Byte]] = {
-    asyncGet(key).get()
+  def get(
+      key: Array[Byte],
+      mode: TkvTxnReadMode = TkvTxnReadMode.Serializable
+  ): Option[Array[Byte]] = {
+    asyncGet(key, mode).get()
   }
 
   def put(key: Array[Byte], value: Array[Byte]): Unit = {
@@ -161,6 +173,14 @@ class TkvTxn(
 
   def delete(key: Array[Byte]): Unit = {
     fdbTxn.clear(tkv.prefix ++ key)
+  }
+
+  def compareAndDelete(key: Array[Byte], expectedValue: Array[Byte]): Unit = {
+    fdbTxn.mutate(
+      MutationType.COMPARE_AND_CLEAR,
+      tkv.prefix ++ key,
+      expectedValue
+    )
   }
 
   def snapshotRange(
@@ -181,12 +201,6 @@ class TkvTxn(
     }
 
     ret.toSeq
-  }
-
-  def addReadConflictKeys(keys: Seq[Array[Byte]]): Unit = {
-    keys.foreach(key => {
-      fdbTxn.addReadConflictKey(tkv.prefix ++ key)
-    })
   }
 
   def commit(): Unit = {

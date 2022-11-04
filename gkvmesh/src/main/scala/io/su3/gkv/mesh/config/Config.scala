@@ -37,8 +37,15 @@ object Config {
       "gkvmesh.fdb.buggify",
       { x => x.map(_.toBoolean).getOrElse(false) }
     )
-  lazy val logLevel: String = tryGetProperty(
-    "gkvmesh.log.level",
+  lazy val globalLogLevel: String = tryGetProperty(
+    "gkvmesh.log.globalLevel",
+    {
+      case Some(x) => x
+      case None    => "info"
+    }
+  )
+  lazy val localLogLevel: String = tryGetProperty(
+    "gkvmesh.log.localLevel",
     {
       case Some(x) => x
       case None    => "info"

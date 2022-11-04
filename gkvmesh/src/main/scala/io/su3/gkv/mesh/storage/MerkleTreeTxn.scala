@@ -4,6 +4,7 @@ import com.apple.foundationdb.tuple.Tuple
 import java.security.MessageDigest
 import io.su3.gkv.mesh.proto.persistence.MerkleLeaf
 import com.google.protobuf.ByteString
+import io.su3.gkv.mesh.proto.persistence.UniqueVersion
 
 class MerkleTreeTxn(txn: TkvTxn) {
   def get(key: Array[Byte]): Option[Array[Byte]] = {
@@ -26,23 +27,30 @@ class MerkleTreeTxn(txn: TkvTxn) {
       }
   }
 
-  def put(key: Array[Byte], value: Array[Byte]): Unit = {
+  def put(
+      key: Array[Byte],
+      value: Array[Byte],
+      version: Option[UniqueVersion] = None
+  ): Unit = {
     txn.put(MerkleTreeTxn.rawDataPrefix ++ key, value)
-    putHashBuffer(key)
+    putHashBuffer(key, version)
   }
 
-  def delete(key: Array[Byte]): Unit = {
+  def delete(key: Array[Byte], version: Option[UniqueVersion] = None): Unit = {
     txn.delete(MerkleTreeTxn.rawDataPrefix ++ key)
-    putHashBuffer(key)
+    putHashBuffer(key, version)
   }
 
-  private def putHashBuffer(key: Array[Byte]): Unit = {
+  private def putHashBuffer(
+      key: Array[Byte],
+      version: Option[UniqueVersion]
+  ): Unit = {
     val hash = MerkleTreeTxn.hashDataKey(key)
     txn.put(
       MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hash,
       MerkleLeaf(
         key = ByteString.copyFrom(key),
-        version = Some(UniqueVersionManager.next())
+        version = Some(version.getOrElse(UniqueVersionManager.next()))
       ).toByteArray
     )
   }
@@ -53,7 +61,7 @@ object MerkleTreeTxn {
   val rawMerkleTreeHashBufferPrefix =
     Tuple.from(TkvKeyspace.merkleTreeHashBufferPrefix).pack()
 
-  private def hashDataKey(key: Array[Byte]): Array[Byte] = {
+  def hashDataKey(key: Array[Byte]): Array[Byte] = {
     MessageDigest.getInstance("SHA-512/256").digest(key)
   }
 }

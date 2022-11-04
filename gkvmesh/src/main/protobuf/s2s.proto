@@ -18,7 +18,7 @@ message PullMerkleTreeRequest {
 
 message PullMerkleTreeResponse {
   bool identical = 1;
-  repeated bytes children = 2;
+  repeated MerkleChild children = 2;
 }
 
 message PullLeafRequest { repeated bytes hashes = 1; }
@@ -33,4 +33,5 @@ message Leaf {
   bytes key = 1;
   bytes value = 2;
   UniqueVersion version = 3;
+  bool deleted = 4;
 }

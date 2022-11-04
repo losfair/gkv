@@ -24,7 +24,10 @@ Compile / PB.targets := Seq(
 
 scalacOptions ++= Seq("-deprecation")
 
-assemblyMergeStrategy in assembly := {
- case PathList("META-INF", _*) => MergeStrategy.discard
- case _                        => MergeStrategy.first
+assembly / assemblyMergeStrategy := {
+  case "module-info.class"                             => MergeStrategy.discard
+  case x if x.contains("io.netty.versions.properties") => MergeStrategy.discard
+  case x =>
+    val oldStrategy = (assembly / assemblyMergeStrategy).value
+    oldStrategy(x)
 }

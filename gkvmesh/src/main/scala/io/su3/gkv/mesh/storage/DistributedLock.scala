@@ -97,6 +97,10 @@ class DistributedLock private (
             renewOnce()
             Thread.sleep(DistributedLock.lockRenewIntervalMs)
           } catch {
+            case e: DistributedLockException =>
+              DistributedLock.logger
+                .error("Failed to renew distributed lock: {}", e.getMessage())
+              return
             case NonFatal(e) =>
               DistributedLock.logger
                 .error("Failed to renew distributed lock", e)

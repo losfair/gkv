@@ -16,3 +16,7 @@ message KvSetRequest {
 }
 
 message KvSetResponse {}
+
+message AaePullRequest { string peer = 1; }
+
+message AaePullResponse {}

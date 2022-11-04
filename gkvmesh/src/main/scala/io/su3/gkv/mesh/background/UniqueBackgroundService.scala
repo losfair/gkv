@@ -4,6 +4,7 @@ import io.su3.gkv.mesh.storage.DistributedLock
 import io.su3.gkv.mesh.storage.Tkv
 import com.typesafe.scalalogging.Logger
 import scala.util.control.NonFatal
+import io.su3.gkv.mesh.storage.DistributedLock.DistributedLockException
 
 trait UniqueBackgroundService {
   def serviceName: String
@@ -30,6 +31,11 @@ object UniqueBackgroundService {
       try {
         tkv.transact { txn => lock.release(txn) }
       } catch {
+        case e: DistributedLockException =>
+          logger.error(
+            "Failed to release lock: {}",
+            e.getMessage()
+          )
         case NonFatal(e) =>
           logger.error(
             "Failed to release lock",
@@ -51,6 +57,8 @@ object UniqueBackgroundService {
           throw new RuntimeException("runForever() returned")
         }
       } catch {
+        case e: DistributedLockException =>
+          logger.error("Lock failure: {}", e.getMessage())
         case NonFatal(e) =>
           logger.error("Service failed", e)
       }
