@@ -71,11 +71,16 @@ class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
                       MerkleTreeTxn.rawDataPrefix ++ leaf.key.toByteArray()
                     txn
                       .asyncGet(dataKey)
-                      .thenApply(_.map { dataValue =>
-                        Leaf(
-                          key = leaf.key,
-                          value = ByteString.copyFrom(dataValue),
-                          version = leaf.version
+                      .thenApply[Option[Leaf]]({ dataValue =>
+                        Some(
+                          Leaf(
+                            key = leaf.key,
+                            value = ByteString.copyFrom(
+                              dataValue.getOrElse(Array.emptyByteArray)
+                            ),
+                            version = leaf.version,
+                            deleted = dataValue.isEmpty
+                          )
                         )
                       })
                   }

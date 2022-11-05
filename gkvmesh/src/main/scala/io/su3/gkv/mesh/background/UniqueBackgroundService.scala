@@ -47,12 +47,12 @@ object UniqueBackgroundService {
     }
   }
 
-  def run(tkv: Tkv, service: UniqueBackgroundService): Unit = {
+  def run(tkv: Tkv, service: UniqueBackgroundService, priority: Int): Unit = {
     val serviceName = service.serviceName
 
     while (true) {
       try {
-        takeover(tkv, service, 0) { lock =>
+        takeover(tkv, service, priority) { lock =>
           service.runForever(lock)
           throw new RuntimeException("runForever() returned")
         }
@@ -67,12 +67,12 @@ object UniqueBackgroundService {
     }
   }
 
-  def spawn(tkv: Tkv, service: UniqueBackgroundService): Thread = {
+  def spawn(tkv: Tkv, service: UniqueBackgroundService, priority: Int): Thread = {
     Thread.startVirtualThread(new Runnable {
       override def run(): Unit = {
         Thread.currentThread().setName(s"gkvmesh-unique-${service.serviceName}")
 
-        UniqueBackgroundService.run(tkv, service)
+        UniqueBackgroundService.run(tkv, service, priority)
       }
     })
   }

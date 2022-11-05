@@ -22,6 +22,7 @@ import io.su3.gkv.mesh.util.UniqueVersionUtil
 import io.su3.gkv.mesh.storage.MerkleTreeTxn
 import io.su3.gkv.mesh.util.BytesUtil
 import io.su3.gkv.mesh.proto.persistence.MerkleLeaf
+import io.su3.gkv.mesh.storage.MeshMetadata
 
 object ActiveAntiEntropyService extends UniqueBackgroundService {
   private val rng = SecureRandom()
@@ -30,7 +31,8 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
   override def serviceName: String = "ActiveAntiEntropyService"
   override def runForever(lock: DistributedLock): Unit = {
     while (true) {
-      runOnce(lock, Seq())
+      val peers = MeshMetadata.get.snapshot.peers
+      runOnce(lock, peers.values.map(_.address))
       val jitter = rng.nextLong(1000)
       Thread.sleep(5000 + jitter)
     }

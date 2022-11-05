@@ -51,4 +51,22 @@ object Config {
       case None    => "info"
     }
   )
+  lazy val backgroundTaskPlacement: Map[String, Int] = tryGetProperty(
+    "gkvmesh.backgroundTask.placement",
+    {
+      case Some(x) =>
+        x.split(",")
+          .map { x =>
+            val parts = x.split(":")
+            if (parts.length != 2) {
+              throw new IllegalArgumentException(
+                s"Invalid backgroundTaskPlacement(taskName, priority): $x"
+              )
+            }
+            (parts(0), parts(1).toInt)
+          }
+          .toMap
+      case None => Map()
+    }
+  )
 }

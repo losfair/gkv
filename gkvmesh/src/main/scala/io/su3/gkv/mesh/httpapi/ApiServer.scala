@@ -48,6 +48,13 @@ import io.su3.gkv.mesh.s2s.ActiveAntiEntropyService
 import io.su3.gkv.mesh.proto.httpapi.AaePullRequest
 import io.su3.gkv.mesh.proto.httpapi.AaePullResponse
 import java.net.SocketException
+import io.su3.gkv.mesh.proto.httpapi.KvListRequest
+import io.su3.gkv.mesh.proto.httpapi.KvListResponse
+import io.su3.gkv.mesh.proto.httpapi.KvListResponseEntry
+import io.su3.gkv.mesh.storage.ClusterMetadata
+import io.su3.gkv.mesh.storage.MeshMetadata
+import io.su3.gkv.mesh.proto.httpapi.PeersResponseEntry
+import io.su3.gkv.mesh.proto.httpapi.PeersResponse
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
@@ -147,6 +154,34 @@ class ApiServer(val tkv: Tkv) {
           HttpResponseStatus.OK,
           Unpooled.wrappedBuffer(resBody.getBytes())
         )
+      case "/data/list" =>
+        // KV list
+        val reqBody = scalapb.json4s.JsonFormat
+          .fromJsonString[KvListRequest](
+            req.content().toString(Charset.defaultCharset())
+          )
+        val entries = tkv.transact { txn =>
+          MerkleTreeTxn(txn).range(
+            reqBody.start.toByteArray(),
+            reqBody.end.toByteArray(),
+            reqBody.limit
+          )
+        }
+        val resBody = scalapb.json4s.JsonFormat.toJsonString(
+          KvListResponse(
+            entries = entries.map { case (k, v) =>
+              KvListResponseEntry(
+                key = ByteString.copyFrom(k),
+                value = ByteString.copyFrom(v)
+              )
+            }
+          )
+        )
+        DefaultFullHttpResponse(
+          req.protocolVersion(),
+          HttpResponseStatus.OK,
+          Unpooled.wrappedBuffer(resBody.getBytes())
+        )
       case "/control/aae/pull" => {
         // AAE pull from peer
         Thread.currentThread().setName("aae-pull")
@@ -161,6 +196,33 @@ class ApiServer(val tkv: Tkv) {
           }
         val resBody = scalapb.json4s.JsonFormat.toJsonString(
           AaePullResponse()
+        )
+        DefaultFullHttpResponse(
+          req.protocolVersion(),
+          HttpResponseStatus.OK,
+          Unpooled.wrappedBuffer(resBody.getBytes())
+        )
+      }
+      case "/cluster_id" => {
+        DefaultFullHttpResponse(
+          req.protocolVersion(),
+          HttpResponseStatus.OK,
+          Unpooled.wrappedBuffer(
+            (ClusterMetadata.getClusterId(tkv) + "\n").getBytes()
+          )
+        )
+      }
+      case "/peers" => {
+        val ss = MeshMetadata.get.snapshot
+        val resBody = scalapb.json4s.JsonFormat.toJsonString(
+          PeersResponse(
+            peers = ss.peers.map { case (clusterId, peer) =>
+              PeersResponseEntry(
+                clusterId = clusterId,
+                address = peer.address
+              )
+            }.toSeq
+          )
         )
         DefaultFullHttpResponse(
           req.protocolVersion(),

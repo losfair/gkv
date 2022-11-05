@@ -8,13 +8,33 @@ import io.su3.gkv.mesh.s2s.ActiveAntiEntropyService
 import io.su3.gkv.mesh.background.UniqueBackgroundService
 import io.su3.gkv.mesh.config.Config
 import io.su3.gkv.mesh.httpapi.ApiServer
+import io.su3.gkv.mesh.storage.ClusterMetadata
+import io.su3.gkv.mesh.storage.MeshMetadata
 
 private val logger = Logger("Main")
 
 private class BackgroundTaskSet(tkv: Tkv) {
+  val placement = Config.backgroundTaskPlacement
+
   val services: Seq[Thread] = Seq[UniqueBackgroundService](
     ActiveAntiEntropyService
-  ).map { x => UniqueBackgroundService.spawn(tkv, x) }
+  ).flatMap { s =>
+    if (placement.isEmpty) {
+      Some((s, 10))
+    } else {
+      placement.get(s.serviceName) match {
+        case Some(n) => Some((s, n))
+        case None    => None
+      }
+    }
+  }.map { case (service, priority) =>
+    logger.info(
+      "Placed background service '{}' with priority {}",
+      service.serviceName,
+      priority
+    )
+    UniqueBackgroundService.spawn(tkv, service, priority)
+  }
 
   def close(): Unit = {
     services.foreach(_.interrupt())
@@ -43,13 +63,20 @@ private def guard[T, R](init: => T, close: T => Unit)(body: T => R): R = {
 
   try {
     guard(Tkv(Config.tkvPrefix), _.close()) { tkv =>
-      guard(MeshServer(tkv), _.close()) { meshServer =>
-        meshServer.start()
-        guard(ApiServer(tkv), _.close()) { apiServer =>
-          apiServer.start()
-          guard(BackgroundTaskSet(tkv), _.close()) { bgTaskSet =>
-            logger.info("Node started")
-            Semaphore(0).acquire()
+      ClusterMetadata.initClusterId(tkv)
+      val clusterId = ClusterMetadata.getClusterId(tkv)
+      logger.info("Cluster ID: {}", clusterId)
+
+      guard(MeshMetadata(tkv), _.close()) { meshMetadata =>
+        meshMetadata.start()
+        guard(MeshServer(tkv), _.close()) { meshServer =>
+          meshServer.start()
+          guard(ApiServer(tkv), _.close()) { apiServer =>
+            apiServer.start()
+            guard(BackgroundTaskSet(tkv), _.close()) { bgTaskSet =>
+              logger.info("Node started")
+              Semaphore(0).acquire()
+            }
           }
         }
       }

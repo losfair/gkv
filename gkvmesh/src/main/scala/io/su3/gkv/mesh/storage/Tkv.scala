@@ -25,6 +25,7 @@ object TkvKeyspace {
   val merkleTreeHashBufferPrefix = "mthb"
   val merkleTreeStructurePrefix = "mts"
   val dataPrefix = "data"
+  val clusterMetadataPrefix = "clusterMetadata"
 
   def constructMerkleTreeStructureKey(
       prefix: Seq[Byte]

@@ -3,7 +3,7 @@
 set -eo pipefail
 
 JAR="target/scala-3.2.0/gkvmesh-assembly-0.1.0-SNAPSHOT.jar"
-JVM_ARGS="--enable-preview -XX:+UseZGC -Xmx4G -XX:+UseLargePages"
+JVM_ARGS="--enable-preview -XX:+UseZGC -Xms1G -Xmx1G -XX:+UseLargePages -Xlog:gc"
 #JVM_ARGS="--enable-preview"
 
 function prepend() { while read line; do echo "${1} ${line}"; done; }
@@ -27,5 +27,11 @@ startJar node-2 \
   -Dgkvmesh.meshserver.port=6202 -Dgkvmesh.httpapi.port=6302 \
   -Dgkvmesh.log.localLevel=info \
   -Dgkvmesh.tkv.prefixHex=02676b766d6573682d6465762d636c75737465722d3200 &
+
+# \x02gkvmesh-dev-cluster-3\x00
+startJar node-3 \
+  -Dgkvmesh.meshserver.port=6203 -Dgkvmesh.httpapi.port=6303 \
+  -Dgkvmesh.log.localLevel=info \
+  -Dgkvmesh.tkv.prefixHex=02676b766d6573682d6465762d636c75737465722d3300 &
 
 wait -n

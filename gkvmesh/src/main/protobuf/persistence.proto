@@ -30,3 +30,7 @@ message UniqueVersion {
   bytes node_id = 2;
   int64 op_seq = 3;
 }
+
+message PeerInfo {
+  string address = 1;
+}
