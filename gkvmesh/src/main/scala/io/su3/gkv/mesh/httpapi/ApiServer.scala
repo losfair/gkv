@@ -137,6 +137,9 @@ class ApiServer(val tkv: Tkv) {
             req.content().toString(Charset.defaultCharset())
           )
         tkv.transact { txn =>
+          // Ensure FDB rate limit has a chance to kick in
+          txn.getReadVersion()
+
           if (reqBody.delete) {
             MerkleTreeTxn(txn).delete(reqBody.key.toByteArray())
           } else {

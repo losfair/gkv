@@ -155,6 +155,10 @@ class TkvTxn(
     fdbTxn.options().setPriorityBatch()
   }
 
+  def getReadVersion(): Long = {
+    fdbTxn.getReadVersion().get()
+  }
+
   def asyncGet(
       key: Array[Byte],
       mode: TkvTxnReadMode = TkvTxnReadMode.Serializable
