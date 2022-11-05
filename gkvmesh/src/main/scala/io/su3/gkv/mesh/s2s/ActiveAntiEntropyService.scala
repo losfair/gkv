@@ -23,6 +23,7 @@ import io.su3.gkv.mesh.storage.MerkleTreeTxn
 import io.su3.gkv.mesh.util.BytesUtil
 import io.su3.gkv.mesh.proto.persistence.MerkleLeaf
 import io.su3.gkv.mesh.storage.MeshMetadata
+import scala.collection.mutable.ArrayBuffer
 
 object ActiveAntiEntropyService extends UniqueBackgroundService {
   private val rng = SecureRandom()
@@ -83,7 +84,7 @@ private class PeerPuller(
     wg: WorkerGroup,
     stub: MeshBlockingStub
 ) {
-  def pullOnce(prefix: Array[Byte], knownNode: Option[MerkleNode]): Unit = {
+  final def pullOnce(prefix: Array[Byte], knownNode: Option[MerkleNode]): Unit = {
     if (knownNode.isDefined) {
       PeerPuller.logger.debug(
         "Using known prefix '{}'",
@@ -143,6 +144,21 @@ private class PeerPuller(
     if (prefix.length == 31) {
       // children are leaves
       pullLeafOnce(prefix, diff)
+    } else if (diff.size == 1) {
+      // Collapse
+      var child = diff.head
+      val newPrefix = ArrayBuffer[Byte]()
+      newPrefix.sizeHint(32)
+      newPrefix ++= prefix
+      newPrefix += child.index.toByte
+
+      while (child.inlineNode.isDefined && child.inlineNode.get.children.size == 1 && newPrefix.length < 31) {
+        child = child.inlineNode.get.children(0)
+        newPrefix += child.index.toByte
+      }
+
+      // Tail recursion
+      pullOnce(newPrefix.toArray, child.inlineNode)
     } else {
       diff.foreach { child =>
         val extendedPrefix = prefix ++ Array(child.index.toByte)
