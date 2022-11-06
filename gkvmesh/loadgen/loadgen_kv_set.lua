@@ -23,7 +23,7 @@ local values = {}
 
 init = function(args)
   for i = 1, keyCount do
-    keys[i] = randomString(10)
+    keys[i] = randomString(5)
   end
 
   for i = 1, valueCount do

@@ -9,7 +9,9 @@ import io.su3.gkv.mesh.background.UniqueBackgroundService
 import io.su3.gkv.mesh.config.Config
 import io.su3.gkv.mesh.httpapi.ApiServer
 import io.su3.gkv.mesh.storage.ClusterMetadata
-import io.su3.gkv.mesh.storage.MeshMetadata
+import io.su3.gkv.mesh.s2s.MeshMetadata
+import sun.misc.Signal
+import sun.misc.SignalHandler
 
 private val logger = Logger("Main")
 
@@ -51,22 +53,14 @@ private def guard[T, R](init: => T, close: T => Unit)(body: T => R): R = {
   }
 }
 
-@main def main: Unit =
-  org.slf4j.LoggerFactory
-    .getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
-    .asInstanceOf[ch.qos.logback.classic.Logger]
-    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.globalLogLevel))
-  org.slf4j.LoggerFactory
-    .getLogger("io.su3.gkv.mesh")
-    .asInstanceOf[ch.qos.logback.classic.Logger]
-    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.localLogLevel))
-
+def realMain: Unit =
   try {
     guard(Tkv(Config.tkvPrefix), _.close()) { tkv =>
       ClusterMetadata.initClusterId(tkv)
       val clusterId = ClusterMetadata.getClusterId(tkv)
       logger.info("Cluster ID: {}", clusterId)
 
+      // Initialization order: MeshMetadata must be closed after ApiServer
       guard(MeshMetadata(tkv), _.close()) { meshMetadata =>
         meshMetadata.start()
         guard(MeshServer(tkv), _.close()) { meshServer =>
@@ -83,4 +77,40 @@ private def guard[T, R](init: => T, close: T => Unit)(body: T => R): R = {
     }
   } finally {
     logger.info("Node stopped")
+  }
+
+@main def main(): Unit =
+  org.slf4j.LoggerFactory
+    .getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
+    .asInstanceOf[ch.qos.logback.classic.Logger]
+    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.globalLogLevel))
+  org.slf4j.LoggerFactory
+    .getLogger("io.su3.gkv.mesh")
+    .asInstanceOf[ch.qos.logback.classic.Logger]
+    .setLevel(ch.qos.logback.classic.Level.toLevel(Config.localLogLevel))
+
+  if (Thread.currentThread().threadId() != 1) {
+    logger.info("Running in SBT task")
+    realMain
+  } else {
+    logger.info("Running in JVM main thread")
+    val mainThread = Thread.currentThread()
+
+    for (sig <- Seq("INT", "TERM")) {
+      Signal.handle(
+        Signal(sig),
+        new SignalHandler {
+          override def handle(sig: Signal): Unit = {
+            logger.info("Received signal: {}", sig.getName())
+            mainThread.interrupt()
+          }
+        }
+      )
+    }
+
+    try {
+      realMain
+    } catch {
+      case _: InterruptedException =>
+    }
   }

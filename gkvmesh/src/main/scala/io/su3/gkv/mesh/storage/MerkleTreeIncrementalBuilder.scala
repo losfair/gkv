@@ -31,7 +31,6 @@ object MerkleTreeIncrementalBuilder {
         case Some(x) =>
           var newRoot: Option[MerkleNode] = None
           val result = lock.tkv.transact { txn =>
-            txn.setBatchPriority()
             lock.validate(txn)
             val result = runIncrementalBuildOnce(txn, x, 1000)
             newRoot = txn
@@ -76,42 +75,16 @@ object MerkleTreeIncrementalBuilder {
 
     val dirtyNodes = loadAndExpandDirtyNodes(txn, range)
 
-    var propagatedUpdates: Map[Seq[Byte], MerkleNode] = range.flatMap {
+    var propagatedUpdates: Map[Seq[Byte], MerkleNode] = range.map {
       case (k, v) =>
         // Write level 32 - leaf
         val hash =
           k.drop(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix.length).toSeq
-
         val leaf = MerkleLeaf.parseFrom(v)
-        val current = dirtyNodes.get(hash).get
-
-        // Only update if the incoming version is newer
-        val incomingVersion = UniqueVersionUtil
-          .serializeUniqueVersion(leaf.version.get)
-        val currentVersion = current
-          .map { n =>
-            UniqueVersionUtil
-              .serializeUniqueVersion(
-                n.leaf.get.version.get
-              )
-          }
-          .getOrElse(Array.emptyByteArray)
-        if (
-          BytesUtil.compare(
-            incomingVersion,
-            currentVersion
-          ) <= 0
-        ) {
-          None
-        } else {
-          val node = MerkleNode(children = Seq(), leaf = Some(leaf))
-          Some(
-            (
-              hash,
-              node
-            )
-          )
-        }
+        (
+          hash,
+          MerkleNode(children = Seq(), leaf = Some(leaf))
+        )
     }.toMap
 
     for (i <- Range.inclusive(32, 0, -1)) {
@@ -203,7 +176,7 @@ object MerkleTreeIncrementalBuilder {
     for (j <- Range.inclusive(0, 24, 8)) {
       val dirtyNodeFutures =
         HashMap[Seq[Byte], CompletableFuture[Option[MerkleNode]]]()
-      for (i <- Range.inclusive(j, if(j == 24) j + 8 else j + 7, 1)) {
+      for (i <- Range.inclusive(j, if (j == 24) j + 8 else j + 7, 1)) {
         for (k <- pendingDataKeys) {
           val hashPrefix = k.take(i).toSeq
           if (

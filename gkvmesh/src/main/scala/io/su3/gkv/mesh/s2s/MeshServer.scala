@@ -93,7 +93,13 @@ class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
       }
     }
   override def pushLeaf(request: PushLeafRequest): Future[PushLeafResponse] =
-    Future { ??? }
+    Future {
+      tkv.transact { txn =>
+        val mt = MerkleTreeTxn(txn)
+        request.entries.foreach(mt.mergeLeaf(_))
+      }
+      PushLeafResponse()
+    }
 }
 
 class MeshServer(val tkv: Tkv) {

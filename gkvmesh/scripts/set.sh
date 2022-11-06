@@ -14,8 +14,8 @@ if [ -z "$API_URL" ]; then
   API_URL="http://localhost:6300"
 fi
 
-keyB64=$(echo -n "$key" | base64)
-valueB64=$(echo -n "$value" | base64)
+keyB64=$(echo -n "$key" | base64 -w 0)
+valueB64=$(echo -n "$value" | base64 -w 0)
 
 curl -f -s -X POST -H "Content-Type: application/json" -d "{\"key\": \"$keyB64\", \"value\": \"$valueB64\"}" \
   "$API_URL/data/set"

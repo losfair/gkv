@@ -5,6 +5,11 @@ import java.security.MessageDigest
 import io.su3.gkv.mesh.proto.persistence.MerkleLeaf
 import com.google.protobuf.ByteString
 import io.su3.gkv.mesh.proto.persistence.UniqueVersion
+import io.su3.gkv.mesh.proto.s2s.Leaf
+import io.su3.gkv.mesh.proto.persistence.MerkleNode
+import io.su3.gkv.mesh.util.UniqueVersionUtil
+import io.su3.gkv.mesh.util.BytesUtil
+import io.su3.gkv.mesh.util.BytesUtil.UnsignedBytesOrdering
 
 class MerkleTreeTxn(txn: TkvTxn) {
   def get(key: Array[Byte]): Option[Array[Byte]] = {
@@ -31,28 +36,83 @@ class MerkleTreeTxn(txn: TkvTxn) {
       key: Array[Byte],
       value: Array[Byte],
       version: Option[UniqueVersion] = None
-  ): Unit = {
-    txn.put(MerkleTreeTxn.rawDataPrefix ++ key, value)
-    putHashBuffer(key, version)
+  ): Option[UniqueVersion] = {
+    putHashBuffer(key, version) match {
+      case Some(actualVersion) =>
+        txn.put(MerkleTreeTxn.rawDataPrefix ++ key, value)
+        Some(actualVersion)
+      case None => None
+    }
   }
 
-  def delete(key: Array[Byte], version: Option[UniqueVersion] = None): Unit = {
-    txn.delete(MerkleTreeTxn.rawDataPrefix ++ key)
-    putHashBuffer(key, version)
+  def delete(
+      key: Array[Byte],
+      version: Option[UniqueVersion] = None
+  ): Option[UniqueVersion] = {
+    putHashBuffer(key, version) match {
+      case Some(actualVersion) =>
+        txn.delete(MerkleTreeTxn.rawDataPrefix ++ key)
+        Some(actualVersion)
+      case None => None
+    }
   }
 
   private def putHashBuffer(
       key: Array[Byte],
       version: Option[UniqueVersion]
-  ): Unit = {
+  ): Option[UniqueVersion] = {
     val hash = MerkleTreeTxn.hashDataKey(key)
-    txn.put(
-      MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hash,
-      MerkleLeaf(
-        key = ByteString.copyFrom(key),
-        version = Some(version.getOrElse(UniqueVersionManager.next()))
-      ).toByteArray
-    )
+
+    val bufferedVersionFut =
+      txn
+        .asyncGet(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hash)
+        .thenApply(
+          _.map(MerkleLeaf.parseFrom(_))
+            .flatMap(_.version)
+            .map(UniqueVersionUtil.serializeUniqueVersion(_).toSeq)
+        )
+    val persistedVersionFut =
+      txn
+        .asyncGet(TkvKeyspace.constructMerkleTreeStructureKey(hash.toSeq))
+        .thenApply(
+          _.flatMap(MerkleNode.parseFrom(_).leaf)
+            .flatMap(_.version)
+            .map(UniqueVersionUtil.serializeUniqueVersion(_).toSeq)
+        )
+
+    val bufferedVersion = bufferedVersionFut.join()
+    val persistedVersion = persistedVersionFut.join()
+    val maxExistingVersion =
+      Seq(Some(Seq.empty[Byte]), bufferedVersion, persistedVersion).flatten.max(
+        UnsignedBytesOrdering()
+      )
+
+    val ourVersion = version.getOrElse(UniqueVersionManager.next())
+    if (
+      BytesUtil.compare(
+        UniqueVersionUtil.serializeUniqueVersion(ourVersion).toSeq,
+        maxExistingVersion
+      ) > 0
+    ) {
+      txn.put(
+        MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hash,
+        MerkleLeaf(
+          key = ByteString.copyFrom(key),
+          version = Some(ourVersion)
+        ).toByteArray
+      )
+      Some(ourVersion)
+    } else {
+      None
+    }
+  }
+
+  def mergeLeaf(leaf: Leaf): Unit = {
+    if (leaf.deleted) {
+      delete(leaf.key.toByteArray, Some(leaf.version.get))
+    } else {
+      put(leaf.key.toByteArray, leaf.value.toByteArray, Some(leaf.version.get))
+    }
   }
 }
 

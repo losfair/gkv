@@ -16,9 +16,13 @@ class WorkerGroup(name: String, concurrency: Int) {
   private val interruptCount = AtomicInteger(0)
   private var closed = false
 
-  def spawnOrBlock(f: => Unit): Unit = {
-    if (!sem.tryAcquire()) {
-      return f
+  private def spawnInternal(f: => Unit, canRunSynchronously: Boolean): Unit = {
+    if (canRunSynchronously) {
+      if (!sem.tryAcquire()) {
+        return f
+      }
+    } else {
+      sem.acquire()
     }
 
     lock.lock()
@@ -52,6 +56,14 @@ class WorkerGroup(name: String, concurrency: Int) {
       lock.unlock()
     }
 
+  }
+
+  def spawn(f: => Unit): Unit = {
+    spawnInternal(f, false)
+  }
+
+  def spawnOrBlock(f: => Unit): Unit = {
+    spawnInternal(f, true)
   }
 
   def waitUntilIdle(): Unit = {

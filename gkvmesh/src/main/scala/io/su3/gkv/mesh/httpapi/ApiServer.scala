@@ -52,26 +52,19 @@ import io.su3.gkv.mesh.proto.httpapi.KvListRequest
 import io.su3.gkv.mesh.proto.httpapi.KvListResponse
 import io.su3.gkv.mesh.proto.httpapi.KvListResponseEntry
 import io.su3.gkv.mesh.storage.ClusterMetadata
-import io.su3.gkv.mesh.storage.MeshMetadata
+import io.su3.gkv.mesh.s2s.MeshMetadata
 import io.su3.gkv.mesh.proto.httpapi.PeersResponseEntry
 import io.su3.gkv.mesh.proto.httpapi.PeersResponse
+import io.su3.gkv.mesh.engine.ManagedTask
+import io.su3.gkv.mesh.proto.s2s.Leaf
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
     Executors.newVirtualThreadPerTaskExecutor()
   )
 
-class ApiServer(val tkv: Tkv) {
-  private var th: Option[Thread] = None
-
-  def start(): Unit = {
-    val me = this
-    th = Some(Thread.startVirtualThread(new Runnable {
-      override def run(): Unit = me.run()
-    }))
-  }
-
-  def run(): Unit = {
+class ApiServer(val tkv: Tkv) extends ManagedTask {
+  override def run(): Unit = {
     val bossGroup = new NioEventLoopGroup(1);
     val workerGroup = new NioEventLoopGroup();
     try {
@@ -86,21 +79,14 @@ class ApiServer(val tkv: Tkv) {
         Config.httpapiPort
       )
       ch.closeFuture().sync()
+    } catch {
+      case _: InterruptedException =>
     } finally {
       val bossShutdown = bossGroup.shutdownGracefully()
       val workerShutdown = workerGroup.shutdownGracefully()
       bossShutdown.sync()
       workerShutdown.sync()
       ApiServer.logger.info("HTTP API server stopped")
-    }
-  }
-
-  def close(): Unit = {
-    th match {
-      case Some(t) =>
-        t.interrupt()
-        t.join()
-      case None => ()
     }
   }
 
@@ -136,7 +122,7 @@ class ApiServer(val tkv: Tkv) {
           .fromJsonString[KvSetRequest](
             req.content().toString(Charset.defaultCharset())
           )
-        tkv.transact { txn =>
+        val actualVersion = tkv.transact { txn =>
           // Ensure FDB rate limit has a chance to kick in
           txn.getReadVersion()
 
@@ -148,6 +134,21 @@ class ApiServer(val tkv: Tkv) {
               reqBody.value.toByteArray()
             )
           }
+        }
+        actualVersion match {
+          case Some(v) =>
+            MeshMetadata.get.broadcastNewLeaf(
+              Leaf(
+                key = ByteString.copyFrom(reqBody.key.toByteArray()),
+                value = ByteString.copyFrom(
+                  if (reqBody.delete) Array.emptyByteArray
+                  else reqBody.value.toByteArray()
+                ),
+                version = Some(v),
+                deleted = reqBody.delete
+              )
+            )
+          case None =>
         }
         val resBody = scalapb.json4s.JsonFormat.toJsonString(
           KvSetResponse()

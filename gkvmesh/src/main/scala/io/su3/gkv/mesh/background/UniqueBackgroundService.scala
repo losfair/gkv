@@ -72,7 +72,11 @@ object UniqueBackgroundService {
       override def run(): Unit = {
         Thread.currentThread().setName(s"gkvmesh-unique-${service.serviceName}")
 
-        UniqueBackgroundService.run(tkv, service, priority)
+        try {
+          UniqueBackgroundService.run(tkv, service, priority)
+        } catch {
+          case _: InterruptedException =>
+        }
       }
     })
   }

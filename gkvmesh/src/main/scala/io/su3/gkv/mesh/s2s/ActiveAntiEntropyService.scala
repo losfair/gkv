@@ -22,8 +22,10 @@ import io.su3.gkv.mesh.util.UniqueVersionUtil
 import io.su3.gkv.mesh.storage.MerkleTreeTxn
 import io.su3.gkv.mesh.util.BytesUtil
 import io.su3.gkv.mesh.proto.persistence.MerkleLeaf
-import io.su3.gkv.mesh.storage.MeshMetadata
 import scala.collection.mutable.ArrayBuffer
+import io.su3.gkv.mesh.storage.ClusterMetadata
+import io.su3.gkv.mesh.proto.persistence.PeerInfo
+import io.su3.gkv.mesh.config.MeshServiceConfig
 
 object ActiveAntiEntropyService extends UniqueBackgroundService {
   private val rng = SecureRandom()
@@ -31,27 +33,31 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
 
   override def serviceName: String = "ActiveAntiEntropyService"
   override def runForever(lock: DistributedLock): Unit = {
+    val ourClusterId = ClusterMetadata.getClusterId(lock.tkv)
+
     while (true) {
-      val peers = MeshMetadata.get.snapshot.peers
-      runOnce(lock, peers.values.map(_.address))
+      val upstreams = MeshMetadata.get.snapshot.peers
+        .getOrElse(ourClusterId, PeerInfo())
+        .upstreams
+      runOnce(lock, upstreams)
       val jitter = rng.nextLong(1000)
       Thread.sleep(5000 + jitter)
     }
   }
 
-  def runOnce(lock: DistributedLock, peers: Iterable[String]): Unit = {
+  def runOnce(lock: DistributedLock, upstreams: Iterable[String]): Unit = {
     MerkleTreeIncrementalBuilder.runIncrementalBuild(lock)
     val wg = WorkerGroup("aae-pull", 4)
     try {
-      peers.foreach { x => wg.spawnOrBlock { pullFromPeer(lock, x) } }
+      upstreams.foreach { x => wg.spawnOrBlock { pullFromPeer(lock, x) } }
       wg.waitUntilIdle()
-      if (!peers.isEmpty) {
-        logger.info("Finished pulling from {} peers", peers.size)
+      if (!upstreams.isEmpty) {
+        logger.info("Finished pulling from {} upstreams", upstreams.size)
       }
     } finally {
       val interrupted = wg.close()
       if (interrupted != 0) {
-        logger.warn("Interrupted {} peer pull tasks", interrupted)
+        logger.warn("Interrupted {} upstream pull tasks", interrupted)
       }
     }
   }
@@ -60,6 +66,8 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
     val channel = ManagedChannelBuilder
       .forTarget(peerAddress)
       .usePlaintext()
+      .defaultServiceConfig(MeshServiceConfig.serviceConfig)
+      .enableRetry()
       .build()
     val stub = MeshGrpc.blockingStub(channel)
 
@@ -84,7 +92,10 @@ private class PeerPuller(
     wg: WorkerGroup,
     stub: MeshBlockingStub
 ) {
-  final def pullOnce(prefix: Array[Byte], knownNode: Option[MerkleNode]): Unit = {
+  final def pullOnce(
+      prefix: Array[Byte],
+      knownNode: Option[MerkleNode]
+  ): Unit = {
     if (knownNode.isDefined) {
       PeerPuller.logger.debug(
         "Using known prefix '{}'",
@@ -152,7 +163,9 @@ private class PeerPuller(
       newPrefix ++= prefix
       newPrefix += child.index.toByte
 
-      while (child.inlineNode.isDefined && child.inlineNode.get.children.size == 1 && newPrefix.length < 31) {
+      while (
+        child.inlineNode.isDefined && child.inlineNode.get.children.size == 1 && newPrefix.length < 31
+      ) {
         child = child.inlineNode.get.children(0)
         newPrefix += child.index.toByte
       }
@@ -178,46 +191,13 @@ private class PeerPuller(
         ByteString.copyFrom(prefix ++ Array(c.index.toByte))
       }.toSeq))
 
-    lock.tkv.transact { txn =>
-      lock.validate(txn)
-
-      res.entries.foreach { leaf =>
-        val dataKeyHash = MerkleTreeTxn.hashDataKey(leaf.key.toByteArray)
-        val incomingVersion = UniqueVersionUtil
-          .serializeUniqueVersion(leaf.version.get)
-
-        // First, check whether we have written to this key locally
-        // Then, check the Merkle tree
-        val currentVersion =
-          txn
-            .get(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ dataKeyHash)
-            .map(MerkleLeaf.parseFrom(_))
-            .orElse(
-              txn
-                .get(
-                  TkvKeyspace.constructMerkleTreeStructureKey(dataKeyHash.toSeq)
-                )
-                .flatMap(MerkleNode.parseFrom(_).leaf)
-            )
-            .flatMap(_.version)
-            .map(UniqueVersionUtil.serializeUniqueVersion(_))
-            .getOrElse(Array.emptyByteArray)
-
-        if (BytesUtil.compare(incomingVersion, currentVersion) > 0) {
-          val mt = MerkleTreeTxn(txn)
-          if (leaf.deleted) {
-            mt.delete(leaf.key.toByteArray, Some(leaf.version.get))
-          } else {
-            mt.put(
-              leaf.key.toByteArray,
-              leaf.value.toByteArray,
-              Some(leaf.version.get)
-            )
-          }
-        }
+    if (!res.entries.isEmpty) {
+      lock.tkv.transact { txn =>
+        lock.validate(txn)
+        val mt = MerkleTreeTxn(txn)
+        res.entries.foreach(mt.mergeLeaf(_))
       }
     }
-
   }
 }
 
