@@ -20,34 +20,44 @@ object DistributedLock {
       name: String,
       priority: Int
   ): Option[DistributedLock] = {
-    val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
+    val kvOwnerKey =
+      Tuple.from(TkvKeyspace.distributedLockPrefix, name, "owner").pack()
+    val kvTimestampKey =
+      Tuple.from(TkvKeyspace.distributedLockPrefix, name, "ts").pack()
+
     val currentTime = System.currentTimeMillis()
-    val current =
-      txn.get(kvKey)
+    val currentOwner =
+      txn.get(kvOwnerKey)
+    val currentTimestamp =
+      txn.get(kvTimestampKey)
 
     // Should we try to acquire the lock?
-    current match {
-      case Some(value) =>
+    (currentOwner, currentTimestamp) match {
+      case (Some(value), Some(timestampBytes)) =>
         val lock = scalapb.json4s.JsonFormat
           .fromJsonString[io.su3.gkv.mesh.proto.persistence.DistributedLock](
             String(value)
           )
-        val timeDiff = currentTime - lock.realTimestamp
+        val timestamp = String(timestampBytes).toLong
+        val timeDiff = currentTime - timestamp
         if (timeDiff < lockTimeoutMs && lock.priority <= priority) {
           return None // lock held by another process
         }
-      case None =>
+      case _ =>
     }
 
     // Acquire the lock!
     val token = java.util.UUID.randomUUID().toString()
     val lock = io.su3.gkv.mesh.proto.persistence
       .DistributedLock(
-        realTimestamp = currentTime,
         token = token,
         priority = priority
       )
-    txn.put(kvKey, scalapb.json4s.JsonFormat.toJsonString(lock).getBytes())
+    txn.put(kvOwnerKey, scalapb.json4s.JsonFormat.toJsonString(lock).getBytes())
+    txn.put(
+      kvTimestampKey,
+      currentTime.toString.getBytes()
+    )
     Some(DistributedLock(tkv, name, token))
   }
 
@@ -81,7 +91,11 @@ class DistributedLock private (
     val token: String
 ) extends AutoCloseable {
   private var renewTask: Option[Thread] = None
-  private val kvKey = Tuple.from(TkvKeyspace.distributedLockPrefix, name).pack()
+
+  private val kvOwnerKey =
+    Tuple.from(TkvKeyspace.distributedLockPrefix, name, "owner").pack()
+  private val kvTimestampKey =
+    Tuple.from(TkvKeyspace.distributedLockPrefix, name, "ts").pack()
 
   private def startRenewTask(): Unit = {
     renewTask = Some(Thread.startVirtualThread(new Runnable {
@@ -125,11 +139,12 @@ class DistributedLock private (
 
   def release(txn: TkvTxn): Unit = {
     validate(txn)
-    txn.delete(kvKey)
+    txn.delete(kvOwnerKey)
+    txn.delete(kvTimestampKey)
   }
 
   def validate(txn: TkvTxn): Unit = {
-    val current = txn.get(kvKey)
+    val current = txn.get(kvOwnerKey)
 
     current match {
       case Some(value) =>
@@ -149,9 +164,7 @@ class DistributedLock private (
     tkv.transact { txn =>
       validate(txn)
       val currentTime = System.currentTimeMillis()
-      val lock = io.su3.gkv.mesh.proto.persistence
-        .DistributedLock(realTimestamp = currentTime, token)
-      txn.put(kvKey, scalapb.json4s.JsonFormat.toJsonString(lock).getBytes())
+      txn.put(kvTimestampKey, currentTime.toString.getBytes())
     }
   }
 }

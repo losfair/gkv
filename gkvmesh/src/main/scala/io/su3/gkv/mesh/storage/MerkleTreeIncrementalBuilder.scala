@@ -30,7 +30,14 @@ object MerkleTreeIncrementalBuilder {
       hashCursor match {
         case Some(x) =>
           var newRoot: Option[MerkleNode] = None
+          var firstTry = true
+          val startTime = System.currentTimeMillis()
           val result = lock.tkv.transact { txn =>
+            if (firstTry) {
+              firstTry = false
+            } else {
+              logger.warn("Retrying incremental build")
+            }
             lock.validate(txn)
             val result = runIncrementalBuildOnce(txn, x, 1000)
             newRoot = txn
@@ -41,13 +48,15 @@ object MerkleTreeIncrementalBuilder {
               .map { x => MerkleNode.parseFrom(x) }
             result
           }
+          val endTime = System.currentTimeMillis()
           logger.info(
-            "from: {} numKeys: {} newRoot: {}",
+            "from: {} numKeys: {} newRoot: {} duration: {}ms",
             Hex.encodeHexString(x),
             result.numKeys,
             newRoot
               .map { x => Hex.encodeHexString(MerkleTreeUtil.hashNode(x)) }
-              .getOrElse("-")
+              .getOrElse("-"),
+            endTime - startTime
           )
           hashCursor = result.nextCursor
         case None => return
@@ -173,10 +182,10 @@ object MerkleTreeIncrementalBuilder {
     val dirtyNodes = HashMap[Seq[Byte], Option[MerkleNode]]()
     var txnGetCount = 0
 
-    for (j <- Range.inclusive(0, 24, 8)) {
+    for (j <- Range.inclusive(0, 28, 4)) {
       val dirtyNodeFutures =
         HashMap[Seq[Byte], CompletableFuture[Option[MerkleNode]]]()
-      for (i <- Range.inclusive(j, if (j == 24) j + 8 else j + 7, 1)) {
+      for (i <- Range.inclusive(j, if (j == 28) j + 4 else j + 3, 1)) {
         for (k <- pendingDataKeys) {
           val hashPrefix = k.take(i).toSeq
           if (
@@ -209,7 +218,7 @@ object MerkleTreeIncrementalBuilder {
       dirtyNodes ++= localDirtyNodes
     }
 
-    logger.debug("loadAndExpandDirtyNodes: txnGetCount: {}", txnGetCount)
+    logger.info("loadAndExpandDirtyNodes: txnGetCount: {}", txnGetCount)
     dirtyNodes.toMap
   }
 
