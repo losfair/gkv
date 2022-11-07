@@ -10,6 +10,7 @@ import io.su3.gkv.mesh.proto.persistence.MerkleNode
 import io.su3.gkv.mesh.util.UniqueVersionUtil
 import io.su3.gkv.mesh.util.BytesUtil
 import io.su3.gkv.mesh.util.BytesUtil.UnsignedBytesOrdering
+import java.util.concurrent.CompletableFuture
 
 class MerkleTreeTxn(txn: TkvTxn) {
   def get(key: Array[Byte]): Option[Array[Byte]] = {
@@ -57,41 +58,64 @@ class MerkleTreeTxn(txn: TkvTxn) {
     }
   }
 
+  def asyncKeyMetadata(
+      dataKeyHash: Seq[Byte]
+  ): CompletableFuture[Option[MerkleLeaf]] = {
+    val bufferedFut =
+      txn
+        .asyncGet(
+          MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ dataKeyHash.toArray
+        )
+        .thenApply(
+          _.map(MerkleLeaf.parseFrom(_))
+        )
+    val persistedFut =
+      txn
+        .asyncGet(TkvKeyspace.constructMerkleTreeStructureKey(dataKeyHash))
+        .thenApply(
+          _.flatMap(MerkleNode.parseFrom(_).leaf)
+        )
+
+    bufferedFut.thenCombine(
+      persistedFut,
+      (buffered, persisted) => {
+        if (buffered.isEmpty) {
+          persisted
+        } else if (persisted.isEmpty) {
+          buffered
+        } else {
+          val (bufferedVersion, persistedVersion) =
+            (buffered.get.version.get, persisted.get.version.get)
+          if (
+            BytesUtil.compare(
+              UniqueVersionUtil.serializeUniqueVersion(bufferedVersion),
+              UniqueVersionUtil.serializeUniqueVersion(persistedVersion)
+            ) > 0
+          ) {
+            buffered
+          } else {
+            persisted
+          }
+        }
+      }
+    )
+  }
+
   private def putHashBuffer(
       key: Array[Byte],
       version: Option[UniqueVersion]
   ): Option[UniqueVersion] = {
     val hash = MerkleTreeTxn.hashDataKey(key)
-
-    val bufferedVersionFut =
-      txn
-        .asyncGet(MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hash)
-        .thenApply(
-          _.map(MerkleLeaf.parseFrom(_))
-            .flatMap(_.version)
-            .map(UniqueVersionUtil.serializeUniqueVersion(_).toSeq)
-        )
-    val persistedVersionFut =
-      txn
-        .asyncGet(TkvKeyspace.constructMerkleTreeStructureKey(hash.toSeq))
-        .thenApply(
-          _.flatMap(MerkleNode.parseFrom(_).leaf)
-            .flatMap(_.version)
-            .map(UniqueVersionUtil.serializeUniqueVersion(_).toSeq)
-        )
-
-    val bufferedVersion = bufferedVersionFut.join()
-    val persistedVersion = persistedVersionFut.join()
-    val maxExistingVersion =
-      Seq(Some(Seq.empty[Byte]), bufferedVersion, persistedVersion).flatten.max(
-        UnsignedBytesOrdering()
-      )
+    val md = asyncKeyMetadata(hash.toSeq).join()
+    val existingVersion = md
+      .map { x => UniqueVersionUtil.serializeUniqueVersion(x.version.get) }
+      .getOrElse(Array.emptyByteArray)
 
     val ourVersion = version.getOrElse(UniqueVersionManager.next())
     if (
       BytesUtil.compare(
         UniqueVersionUtil.serializeUniqueVersion(ourVersion).toSeq,
-        maxExistingVersion
+        existingVersion
       ) > 0
     ) {
       txn.put(

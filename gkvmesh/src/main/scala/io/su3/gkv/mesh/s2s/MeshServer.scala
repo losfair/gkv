@@ -58,34 +58,29 @@ class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
       tkv.transact { txn =>
         val entries = request.hashes
           .map { hash =>
-            val key = TkvKeyspace.constructMerkleTreeStructureKey(
-              hash.toByteArray().toSeq
+            val leafFut =
+              MerkleTreeTxn(txn).asyncKeyMetadata(hash.toByteArray().toSeq)
+            val value = leafFut.thenCompose(
+              _.map { leaf =>
+                val dataKey =
+                  MerkleTreeTxn.rawDataPrefix ++ leaf.key.toByteArray()
+                txn
+                  .asyncGet(dataKey)
+                  .thenApply[Option[Leaf]]({ dataValue =>
+                    Some(
+                      Leaf(
+                        key = leaf.key,
+                        value = ByteString.copyFrom(
+                          dataValue.getOrElse(Array.emptyByteArray)
+                        ),
+                        version = leaf.version,
+                        deleted = dataValue.isEmpty
+                      )
+                    )
+                  })
+              }
+                .getOrElse(CompletableFuture.completedFuture(None))
             )
-            val value = txn
-              .asyncGet(key)
-              .thenCompose(
-                _.map(MerkleNode.parseFrom(_))
-                  .flatMap(_.leaf)
-                  .map { leaf =>
-                    val dataKey =
-                      MerkleTreeTxn.rawDataPrefix ++ leaf.key.toByteArray()
-                    txn
-                      .asyncGet(dataKey)
-                      .thenApply[Option[Leaf]]({ dataValue =>
-                        Some(
-                          Leaf(
-                            key = leaf.key,
-                            value = ByteString.copyFrom(
-                              dataValue.getOrElse(Array.emptyByteArray)
-                            ),
-                            version = leaf.version,
-                            deleted = dataValue.isEmpty
-                          )
-                        )
-                      })
-                  }
-                  .getOrElse(CompletableFuture.completedFuture(None))
-              )
             value
           }
           .flatMap(_.get())
