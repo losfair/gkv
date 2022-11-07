@@ -71,6 +71,8 @@ object MerkleTreeIncrementalBuilder {
   ): BuildResult = {
     assert(hashCursor.length == 32)
 
+    var txnPutCount = 0
+
     val range = txn
       .snapshotRange(
         (MerkleTreeTxn.rawMerkleTreeHashBufferPrefix ++ hashCursor)
@@ -126,6 +128,7 @@ object MerkleTreeIncrementalBuilder {
             TkvKeyspace.constructMerkleTreeStructureKey(k),
             v.toByteArray
           )
+          txnPutCount += 1
         }
       }
 
@@ -145,6 +148,7 @@ object MerkleTreeIncrementalBuilder {
                   ),
                   node.toByteArray
                 )
+                txnPutCount += 1
                 child
               }
             case (child, None) => child
@@ -157,7 +161,10 @@ object MerkleTreeIncrementalBuilder {
     // This prevents conflict with online transactions.
     for ((k, v) <- range) {
       txn.compareAndDelete(k, v)
+      txnPutCount += 1
     }
+
+    logger.info("runIncrementalBuildOnce: txnPutCount: {}", txnPutCount)
 
     BuildResult(
       numKeys = range.size,

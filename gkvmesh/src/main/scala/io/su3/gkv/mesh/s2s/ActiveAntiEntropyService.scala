@@ -40,8 +40,8 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
         .getOrElse(ourClusterId, PeerInfo())
         .upstreams
       runOnce(lock, upstreams)
-      val jitter = rng.nextLong(1000)
-      Thread.sleep(5000 + jitter)
+      val jitter = rng.nextLong(5000)
+      Thread.sleep(20000 + jitter)
     }
   }
 
@@ -70,12 +70,14 @@ object ActiveAntiEntropyService extends UniqueBackgroundService {
       .enableRetry()
       .build()
     val stub = MeshGrpc.blockingStub(channel)
+    val startTime = System.currentTimeMillis()
 
     val wg = WorkerGroup("aae-pull-" + peerAddress, 256)
     try {
       PeerPuller(lock, wg, stub).pullOnce(Array.emptyByteArray, None)
       wg.waitUntilIdle()
-      logger.info("Pull from {} done", peerAddress)
+      val endTime = System.currentTimeMillis()
+      logger.info("Pull from {} done in {}ms", peerAddress, endTime - startTime)
     } finally {
       val interrupted = wg.close()
       if (interrupted != 0) {

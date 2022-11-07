@@ -69,4 +69,12 @@ object Config {
       case None => Map()
     }
   )
+
+  lazy val disablePush: Boolean = tryGetProperty(
+    "gkvmesh.apiserver.disablePush",
+    {
+      case Some(x) => x.toBoolean
+      case None    => false
+    }
+  )
 }

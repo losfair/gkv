@@ -55,6 +55,12 @@ private def guard[T, R](init: => T, close: T => Unit)(body: T => R): R = {
 
 def realMain: Unit =
   try {
+    if (Config.disablePush) {
+      logger.warn(
+        "gkvmesh.apiserver.disablePush is set, leaf push is disabled and relying on AAE to sync"
+      )
+    }
+
     guard(Tkv(Config.tkvPrefix), _.close()) { tkv =>
       ClusterMetadata.initClusterId(tkv)
       val clusterId = ClusterMetadata.getClusterId(tkv)

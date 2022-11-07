@@ -135,21 +135,25 @@ class ApiServer(val tkv: Tkv) extends ManagedTask {
             )
           }
         }
-        actualVersion match {
-          case Some(v) =>
-            MeshMetadata.get.broadcastNewLeaf(
-              Leaf(
-                key = ByteString.copyFrom(reqBody.key.toByteArray()),
-                value = ByteString.copyFrom(
-                  if (reqBody.delete) Array.emptyByteArray
-                  else reqBody.value.toByteArray()
-                ),
-                version = Some(v),
-                deleted = reqBody.delete
+
+        if (!Config.disablePush) {
+          actualVersion match {
+            case Some(v) =>
+              MeshMetadata.get.broadcastNewLeaf(
+                Leaf(
+                  key = ByteString.copyFrom(reqBody.key.toByteArray()),
+                  value = ByteString.copyFrom(
+                    if (reqBody.delete) Array.emptyByteArray
+                    else reqBody.value.toByteArray()
+                  ),
+                  version = Some(v),
+                  deleted = reqBody.delete
+                )
               )
-            )
-          case None =>
+            case None =>
+          }
         }
+
         val resBody = scalapb.json4s.JsonFormat.toJsonString(
           KvSetResponse()
         )
