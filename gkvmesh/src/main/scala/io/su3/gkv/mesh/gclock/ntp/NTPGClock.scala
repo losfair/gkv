@@ -106,7 +106,7 @@ class NTPGClock extends ManagedTask, GClock {
     }
 
     val newSt = State(
-      lastUpdateNanoTime = localEndTs,
+      lastUpdateNanoTime = localStartTs + (localEndTs - localStartTs) / 2,
       serverTime = serverTime,
       serverTimeDispersion = totalDispersion
     )
