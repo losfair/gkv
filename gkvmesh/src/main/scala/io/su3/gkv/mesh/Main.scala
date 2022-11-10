@@ -12,10 +12,12 @@ import io.su3.gkv.mesh.storage.ClusterMetadata
 import io.su3.gkv.mesh.s2s.MeshMetadata
 import sun.misc.Signal
 import sun.misc.SignalHandler
+import io.su3.gkv.mesh.gclock.ntp.NTPGClock
+import io.su3.gkv.mesh.gclock.GClock
 
 private val logger = Logger("Main")
 
-private class BackgroundTaskSet(tkv: Tkv) {
+private class BackgroundTaskSet(tkv: Tkv, gclock: GClock) {
   val placement = Config.backgroundTaskPlacement
 
   val services: Seq[Thread] = Seq[UniqueBackgroundService](
@@ -35,7 +37,7 @@ private class BackgroundTaskSet(tkv: Tkv) {
       service.serviceName,
       priority
     )
-    UniqueBackgroundService.spawn(tkv, service, priority)
+    UniqueBackgroundService.spawn(tkv, gclock, service, priority)
   }
 
   def close(): Unit = {
@@ -66,16 +68,22 @@ def realMain: Unit =
       val clusterId = ClusterMetadata.getClusterId(tkv)
       logger.info("Cluster ID: {}", clusterId)
 
-      // Initialization order: MeshMetadata must be closed after ApiServer
-      guard(MeshMetadata(tkv), _.close()) { meshMetadata =>
-        meshMetadata.start()
-        guard(MeshServer(tkv), _.close()) { meshServer =>
-          meshServer.start()
-          guard(ApiServer(tkv), _.close()) { apiServer =>
-            apiServer.start()
-            guard(BackgroundTaskSet(tkv), _.close()) { bgTaskSet =>
-              logger.info("Node started")
-              Semaphore(0).acquire()
+      guard(NTPGClock(), _.close()) { gclock =>
+        gclock.start()
+        gclock.waitUntilReady()
+        logger.info("GClock is ready, current time: {}", gclock.now())
+
+        // Initialization order: MeshMetadata must be closed after ApiServer
+        guard(MeshMetadata(tkv), _.close()) { meshMetadata =>
+          meshMetadata.start()
+          guard(MeshServer(tkv, gclock), _.close()) { meshServer =>
+            meshServer.start()
+            guard(ApiServer(tkv, gclock), _.close()) { apiServer =>
+              apiServer.start()
+              guard(BackgroundTaskSet(tkv, gclock), _.close()) { bgTaskSet =>
+                logger.info("Node started")
+                Semaphore(0).acquire()
+              }
             }
           }
         }

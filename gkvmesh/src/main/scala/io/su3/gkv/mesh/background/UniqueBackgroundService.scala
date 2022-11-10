@@ -5,6 +5,7 @@ import io.su3.gkv.mesh.storage.Tkv
 import com.typesafe.scalalogging.Logger
 import scala.util.control.NonFatal
 import io.su3.gkv.mesh.storage.DistributedLock.DistributedLockException
+import io.su3.gkv.mesh.gclock.GClock
 
 trait UniqueBackgroundService {
   def serviceName: String
@@ -16,10 +17,11 @@ object UniqueBackgroundService {
 
   def takeover[T](
       tkv: Tkv,
+      gclock: GClock,
       service: UniqueBackgroundService,
       priority: Int
   )(f: DistributedLock => T): T = {
-    val lock = DistributedLock.acquire(tkv, service.serviceName, priority)
+    val lock = DistributedLock.acquire(tkv, gclock, service.serviceName, priority)
     logger.info(
       "Acquired lock, token: {}",
       lock.token
@@ -47,12 +49,12 @@ object UniqueBackgroundService {
     }
   }
 
-  def run(tkv: Tkv, service: UniqueBackgroundService, priority: Int): Unit = {
+  def run(tkv: Tkv, gclock: GClock, service: UniqueBackgroundService, priority: Int): Unit = {
     val serviceName = service.serviceName
 
     while (true) {
       try {
-        takeover(tkv, service, priority) { lock =>
+        takeover(tkv, gclock, service, priority) { lock =>
           service.runForever(lock)
           throw new RuntimeException("runForever() returned")
         }
@@ -67,13 +69,13 @@ object UniqueBackgroundService {
     }
   }
 
-  def spawn(tkv: Tkv, service: UniqueBackgroundService, priority: Int): Thread = {
+  def spawn(tkv: Tkv, gclock: GClock, service: UniqueBackgroundService, priority: Int): Thread = {
     Thread.startVirtualThread(new Runnable {
       override def run(): Unit = {
         Thread.currentThread().setName(s"gkvmesh-unique-${service.serviceName}")
 
         try {
-          UniqueBackgroundService.run(tkv, service, priority)
+          UniqueBackgroundService.run(tkv, gclock, service, priority)
         } catch {
           case _: InterruptedException =>
         }

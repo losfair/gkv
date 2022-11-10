@@ -7,6 +7,7 @@ import io.su3.gkv.mesh.storage.DistributedLock.DistributedLockException
 import org.slf4j.MDC
 import scala.util.control.NonFatal.apply
 import scala.util.control.NonFatal
+import io.su3.gkv.mesh.gclock.GClock
 
 object DistributedLock {
   val logger = Logger(getClass())
@@ -17,6 +18,7 @@ object DistributedLock {
   private def tryAcquire(
       tkv: Tkv,
       txn: TkvTxn,
+      gclock: GClock,
       name: String,
       priority: Int
   ): Option[DistributedLock] = {
@@ -25,7 +27,7 @@ object DistributedLock {
     val kvTimestampKey =
       Tuple.from(TkvKeyspace.distributedLockPrefix, name, "ts").pack()
 
-    val currentTime = System.currentTimeMillis()
+    val currentTime = gclock.now()
     val currentOwner =
       txn.get(kvOwnerKey)
     val currentTimestamp =
@@ -39,8 +41,8 @@ object DistributedLock {
             String(value)
           )
         val timestamp = String(timestampBytes).toLong
-        val timeDiff = currentTime - timestamp
-        if (timeDiff < lockTimeoutMs && lock.priority <= priority) {
+        val deadline = timestamp + lockTimeoutMs
+        if (!gclock.after(deadline) && lock.priority <= priority) {
           return None // lock held by another process
         }
       case _ =>
@@ -58,13 +60,20 @@ object DistributedLock {
       kvTimestampKey,
       currentTime.toString.getBytes()
     )
-    Some(DistributedLock(tkv, name, token))
+    Some(DistributedLock(tkv, gclock, name, token))
   }
 
-  def acquire(tkv: Tkv, name: String, priority: Int = 0): DistributedLock = {
+  def acquire(
+      tkv: Tkv,
+      gclock: GClock,
+      name: String,
+      priority: Int = 0
+  ): DistributedLock = {
     while (true) {
       try {
-        val ret = tkv.transact { txn => tryAcquire(tkv, txn, name, priority) }
+        val ret = tkv.transact { txn =>
+          tryAcquire(tkv, txn, gclock, name, priority)
+        }
         ret match {
           case Some(lock) =>
             lock.startRenewTask()
@@ -87,6 +96,7 @@ object DistributedLock {
 
 class DistributedLock private (
     val tkv: Tkv,
+    val gclock: GClock,
     val name: String,
     val token: String
 ) extends AutoCloseable {
@@ -163,7 +173,7 @@ class DistributedLock private (
   private def renewOnce(): Unit = {
     tkv.transact { txn =>
       validate(txn)
-      val currentTime = System.currentTimeMillis()
+      val currentTime = gclock.now()
       txn.put(kvTimestampKey, currentTime.toString.getBytes())
     }
   }

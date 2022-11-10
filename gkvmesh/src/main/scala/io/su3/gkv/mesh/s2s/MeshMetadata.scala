@@ -22,7 +22,11 @@ class MeshMetadata(tkv: Tkv) {
 
   case class Snapshot(
       peers: Map[String, PeerInfo] // clusterId -> PeerInfo
-  )
+  ) {
+    def getPeerByRegionName(regionName: String): Option[(String, PeerInfo)] = {
+      peers.find(_._2.regionName == regionName)
+    }
+  }
 
   val peersPrefix = "@system/peers/".getBytes()
 

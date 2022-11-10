@@ -57,13 +57,14 @@ import io.su3.gkv.mesh.proto.httpapi.PeersResponseEntry
 import io.su3.gkv.mesh.proto.httpapi.PeersResponse
 import io.su3.gkv.mesh.engine.ManagedTask
 import io.su3.gkv.mesh.proto.s2s.Leaf
+import io.su3.gkv.mesh.gclock.GClock
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
     Executors.newVirtualThreadPerTaskExecutor()
   )
 
-class ApiServer(val tkv: Tkv) extends ManagedTask {
+class ApiServer(val tkv: Tkv, val gclock: GClock) extends ManagedTask {
   override def run(): Unit = {
     val bossGroup = new NioEventLoopGroup(1);
     val workerGroup = new NioEventLoopGroup();
@@ -123,22 +124,20 @@ class ApiServer(val tkv: Tkv) extends ManagedTask {
             req.content().toString(Charset.defaultCharset())
           )
         val actualVersion = tkv.transact { txn =>
-          // Ensure FDB rate limit has a chance to kick in
-          txn.getReadVersion()
-
           if (reqBody.delete) {
-            MerkleTreeTxn(txn).delete(reqBody.key.toByteArray())
+            MerkleTreeTxn(txn).delete(gclock, reqBody.key.toByteArray())
           } else {
             MerkleTreeTxn(txn).put(
+              gclock,
               reqBody.key.toByteArray(),
               reqBody.value.toByteArray()
             )
           }
         }
 
-        if (!Config.disablePush) {
-          actualVersion match {
-            case Some(v) =>
+        actualVersion match {
+          case Some(v) =>
+            if (!Config.disablePush) {
               MeshMetadata.get.broadcastNewLeaf(
                 Leaf(
                   key = ByteString.copyFrom(reqBody.key.toByteArray()),
@@ -150,8 +149,8 @@ class ApiServer(val tkv: Tkv) extends ManagedTask {
                   deleted = reqBody.delete
                 )
               )
-            case None =>
-          }
+            }
+          case None =>
         }
 
         val resBody = scalapb.json4s.JsonFormat.toJsonString(
@@ -198,7 +197,7 @@ class ApiServer(val tkv: Tkv) extends ManagedTask {
             req.content().toString(Charset.defaultCharset())
           )
         val lock =
-          UniqueBackgroundService.takeover(tkv, ActiveAntiEntropyService, -1) {
+          UniqueBackgroundService.takeover(tkv, gclock, ActiveAntiEntropyService, -1) {
             lock =>
               ActiveAntiEntropyService.runOnce(lock, Seq(reqBody.peer))
           }

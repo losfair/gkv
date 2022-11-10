@@ -23,13 +23,14 @@ import io.su3.gkv.mesh.proto.s2s.Leaf
 import com.google.protobuf.ByteString
 import io.grpc.ServerBuilder
 import io.grpc.netty.NettyServerBuilder
+import io.su3.gkv.mesh.gclock.GClock
 
 private implicit val defaultExecutionContext: ExecutionContext =
   ExecutionContext.fromExecutorService(
     Executors.newVirtualThreadPerTaskExecutor()
   )
 
-class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
+class MeshImpl(val tkv: Tkv, val gclock: GClock) extends MeshGrpc.Mesh {
 
   override def pullMerkleTree(
       request: PullMerkleTreeRequest
@@ -91,13 +92,13 @@ class MeshImpl(val tkv: Tkv) extends MeshGrpc.Mesh {
     Future {
       tkv.transact { txn =>
         val mt = MerkleTreeTxn(txn)
-        request.entries.foreach(mt.mergeLeaf(_))
+        request.entries.foreach(mt.mergeLeaf(gclock, _))
       }
       PushLeafResponse()
     }
 }
 
-class MeshServer(val tkv: Tkv) {
+class MeshServer(val tkv: Tkv, val gclock: GClock) {
   private[this] var server: Option[Server] = None
   private val logger = Logger(getClass())
 
@@ -107,7 +108,7 @@ class MeshServer(val tkv: Tkv) {
       NettyServerBuilder
         .forPort(port)
         .addService(
-          MeshGrpc.bindService(new MeshImpl(tkv), defaultExecutionContext)
+          MeshGrpc.bindService(new MeshImpl(tkv, gclock), defaultExecutionContext)
         )
         .build
         .start

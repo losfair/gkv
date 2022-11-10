@@ -11,6 +11,9 @@ import io.su3.gkv.mesh.util.UniqueVersionUtil
 import io.su3.gkv.mesh.util.BytesUtil
 import io.su3.gkv.mesh.util.BytesUtil.UnsignedBytesOrdering
 import java.util.concurrent.CompletableFuture
+import com.typesafe.scalalogging.Logger
+import org.apache.commons.codec.binary.Hex
+import io.su3.gkv.mesh.gclock.GClock
 
 class MerkleTreeTxn(txn: TkvTxn) {
   def get(key: Array[Byte]): Option[Array[Byte]] = {
@@ -34,11 +37,12 @@ class MerkleTreeTxn(txn: TkvTxn) {
   }
 
   def put(
+      gclock: GClock,
       key: Array[Byte],
       value: Array[Byte],
       version: Option[UniqueVersion] = None
   ): Option[UniqueVersion] = {
-    putHashBuffer(key, version) match {
+    putHashBuffer(gclock, key, version) match {
       case Some(actualVersion) =>
         txn.put(MerkleTreeTxn.rawDataPrefix ++ key, value)
         Some(actualVersion)
@@ -47,10 +51,11 @@ class MerkleTreeTxn(txn: TkvTxn) {
   }
 
   def delete(
+      gclock: GClock,
       key: Array[Byte],
       version: Option[UniqueVersion] = None
   ): Option[UniqueVersion] = {
-    putHashBuffer(key, version) match {
+    putHashBuffer(gclock, key, version) match {
       case Some(actualVersion) =>
         txn.delete(MerkleTreeTxn.rawDataPrefix ++ key)
         Some(actualVersion)
@@ -94,6 +99,10 @@ class MerkleTreeTxn(txn: TkvTxn) {
           ) {
             buffered
           } else {
+            MerkleTreeTxn.logger.error(
+              "Buffered version is not newer than persisted version for data key '{}'",
+              Hex.encodeHexString(buffered.get.key.toByteArray)
+            )
             persisted
           }
         }
@@ -102,6 +111,7 @@ class MerkleTreeTxn(txn: TkvTxn) {
   }
 
   private def putHashBuffer(
+      gclock: GClock,
       key: Array[Byte],
       version: Option[UniqueVersion]
   ): Option[UniqueVersion] = {
@@ -111,7 +121,7 @@ class MerkleTreeTxn(txn: TkvTxn) {
       .map { x => UniqueVersionUtil.serializeUniqueVersion(x.version.get) }
       .getOrElse(Array.emptyByteArray)
 
-    val ourVersion = version.getOrElse(UniqueVersionManager.next())
+    val ourVersion = version.getOrElse(UniqueVersionManager.next(gclock))
     if (
       BytesUtil.compare(
         UniqueVersionUtil.serializeUniqueVersion(ourVersion).toSeq,
@@ -131,11 +141,11 @@ class MerkleTreeTxn(txn: TkvTxn) {
     }
   }
 
-  def mergeLeaf(leaf: Leaf): Unit = {
+  def mergeLeaf(gclock: GClock, leaf: Leaf): Unit = {
     if (leaf.deleted) {
-      delete(leaf.key.toByteArray, Some(leaf.version.get))
+      delete(gclock, leaf.key.toByteArray, Some(leaf.version.get))
     } else {
-      put(leaf.key.toByteArray, leaf.value.toByteArray, Some(leaf.version.get))
+      put(gclock, leaf.key.toByteArray, leaf.value.toByteArray, Some(leaf.version.get))
     }
   }
 }
@@ -144,6 +154,7 @@ object MerkleTreeTxn {
   val rawDataPrefix = Tuple.from(TkvKeyspace.dataPrefix).pack()
   val rawMerkleTreeHashBufferPrefix =
     Tuple.from(TkvKeyspace.merkleTreeHashBufferPrefix).pack()
+  val logger = Logger(getClass())
 
   def hashDataKey(key: Array[Byte]): Array[Byte] = {
     MessageDigest.getInstance("SHA-512/256").digest(key)

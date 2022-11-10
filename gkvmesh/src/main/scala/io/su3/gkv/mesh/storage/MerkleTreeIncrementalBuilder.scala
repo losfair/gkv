@@ -164,7 +164,7 @@ object MerkleTreeIncrementalBuilder {
       txnPutCount += 1
     }
 
-    logger.info("runIncrementalBuildOnce: txnPutCount: {}", txnPutCount)
+    logger.debug("runIncrementalBuildOnce: txnPutCount: {}", txnPutCount)
 
     BuildResult(
       numKeys = range.size,
@@ -225,7 +225,7 @@ object MerkleTreeIncrementalBuilder {
       dirtyNodes ++= localDirtyNodes
     }
 
-    logger.info("loadAndExpandDirtyNodes: txnGetCount: {}", txnGetCount)
+    logger.debug("loadAndExpandDirtyNodes: txnGetCount: {}", txnGetCount)
     dirtyNodes.toMap
   }
 

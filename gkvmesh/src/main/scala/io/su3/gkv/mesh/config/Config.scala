@@ -77,4 +77,29 @@ object Config {
       case None    => false
     }
   )
+
+  lazy val gclockNtpServer: String = tryGetProperty(
+    "gkvmesh.gclock.ntpServer",
+    {
+      case Some(x) => x
+      case None    => "time.google.com"
+      // case None    => "169.254.169.123" // AWS TimeSync
+    }
+  )
+
+  lazy val gclockMaxDispersionMs: Long = tryGetProperty(
+    "gkvmesh.gclock.maxDispersionMs",
+    {
+      case Some(x) => x.toLong
+      case None    => 100
+    }
+  )
+
+  lazy val gclockLocalAccumulatedDispersionPerMs: Double = tryGetProperty(
+    "gkvmesh.gclock.localAccumulatedDispersionPerMs",
+    {
+      case Some(x) => x.toDouble
+      case None    => 0.001 // 0.001ms accumulated per ms
+    }
+  )
 }

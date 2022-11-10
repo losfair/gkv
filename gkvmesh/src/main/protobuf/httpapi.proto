@@ -9,13 +9,23 @@ message KvGetResponse {
   bool exists = 2;
 }
 
+message KvBatchGetRequest { repeated KvGetRequest requests = 1; }
+
+message KvBatchGetResponse { repeated KvGetResponse responses = 1; }
+
 message KvSetRequest {
   bytes key = 1;
   bytes value = 2;
   bool delete = 3;
+
+  bool consistent_waw = 4;
 }
 
 message KvSetResponse {}
+
+message KvBatchSetRequest { repeated KvSetRequest requests = 1; }
+
+message KvBatchSetResponse {}
 
 message KvListRequest {
   bytes start = 1;
@@ -23,18 +33,14 @@ message KvListRequest {
   int32 limit = 3;
 }
 
-message KvListResponse {
-  repeated KvListResponseEntry entries = 1;
-}
+message KvListResponse { repeated KvListResponseEntry entries = 1; }
 
 message KvListResponseEntry {
   bytes key = 1;
   bytes value = 2;
 }
 
-message PeersResponse {
-  repeated PeersResponseEntry peers = 1;
-}
+message PeersResponse { repeated PeersResponseEntry peers = 1; }
 
 message PeersResponseEntry {
   string cluster_id = 1;

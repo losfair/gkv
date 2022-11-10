@@ -14,7 +14,8 @@ lazy val root = project
       "commons-codec" % "commons-codec" % "1.15",
       "io.grpc" % "grpc-netty" % "1.50.2",
       "com.thesamet.scalapb" %% "scalapb-runtime-grpc" % scalapb.compiler.Version.scalapbVersion,
-      "com.thesamet.scalapb" %% "scalapb-json4s" % "0.12.0"
+      "com.thesamet.scalapb" %% "scalapb-json4s" % "0.12.0",
+      "commons-net" % "commons-net" % "3.8.0"
     )
   )
 

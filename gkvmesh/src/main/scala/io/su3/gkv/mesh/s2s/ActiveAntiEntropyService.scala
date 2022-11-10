@@ -26,6 +26,7 @@ import scala.collection.mutable.ArrayBuffer
 import io.su3.gkv.mesh.storage.ClusterMetadata
 import io.su3.gkv.mesh.proto.persistence.PeerInfo
 import io.su3.gkv.mesh.config.MeshServiceConfig
+import io.su3.gkv.mesh.gclock.GClock
 
 object ActiveAntiEntropyService extends UniqueBackgroundService {
   private val rng = SecureRandom()
@@ -197,7 +198,7 @@ private class PeerPuller(
       lock.tkv.transact { txn =>
         lock.validate(txn)
         val mt = MerkleTreeTxn(txn)
-        res.entries.foreach(mt.mergeLeaf(_))
+        res.entries.foreach(mt.mergeLeaf(lock.gclock, _))
       }
     }
   }
