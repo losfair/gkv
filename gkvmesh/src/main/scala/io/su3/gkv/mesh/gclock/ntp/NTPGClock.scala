@@ -33,17 +33,13 @@ class NTPGClock extends ManagedTask, GClock {
   override def isReady(): Boolean = state.get().isDefined
 
   override def now(): Long = withState(System.currentTimeMillis()) { s =>
-    val now = System.nanoTime()
-    val elapsed = now - s.lastUpdateNanoTime
-    val elapsedMs = elapsed / 1000000
+    val elapsedMs = s.elapsedMs()
     val serverTime = s.serverTime + elapsedMs
     serverTime.toLong
   }
 
   override def after(t: Long): Boolean = withState(false) { s =>
-    val now = System.nanoTime()
-    val elapsed = now - s.lastUpdateNanoTime
-    val elapsedMs = elapsed / 1000000
+    val elapsedMs = s.elapsedMs()
     val localAccumulatedDispersion = elapsedMs * localAccumulatedDispersionPerMs
     val earliestBound =
       s.serverTime - s.serverTimeDispersion - localAccumulatedDispersion + elapsedMs
@@ -51,9 +47,7 @@ class NTPGClock extends ManagedTask, GClock {
   }
 
   override def before(t: Long): Boolean = withState(false) { s =>
-    val now = System.nanoTime()
-    val elapsed = now - s.lastUpdateNanoTime
-    val elapsedMs = elapsed / 1000000
+    val elapsedMs = s.elapsedMs()
     val localAccumulatedDispersion = elapsedMs * localAccumulatedDispersionPerMs
     val latestBound =
       s.serverTime + s.serverTimeDispersion + localAccumulatedDispersion + elapsedMs
@@ -105,12 +99,34 @@ class NTPGClock extends ManagedTask, GClock {
       )
     }
 
+    val oldSt = state.get()
     val newSt = State(
       lastUpdateNanoTime = localStartTs + (localEndTs - localStartTs) / 2,
       serverTime = serverTime,
       serverTimeDispersion = totalDispersion
     )
-    state.set(Some(newSt))
+
+    oldSt match {
+      case Some(old) =>
+        val oldElapsedMs = old.elapsedMs()
+        val oldAccumulatedDispersion =
+          oldElapsedMs * localAccumulatedDispersionPerMs
+        val oldTotalDispersion =
+          old.serverTimeDispersion + oldAccumulatedDispersion
+
+        if (newSt.serverTimeDispersion > oldTotalDispersion) {
+          logger.warn(
+            "New time is less accurate than old time, ignoring (old total dispersion = {}, new dispersion = {})",
+            oldTotalDispersion,
+            newSt.serverTimeDispersion
+          )
+        } else {
+          state.set(Some(newSt))
+        }
+      case None =>
+        state.set(Some(newSt))
+    }
+
   }
 }
 
@@ -118,4 +134,11 @@ private case class State(
     lastUpdateNanoTime: Long,
     serverTime: Double,
     serverTimeDispersion: Double
-)
+) {
+  def elapsedMs(): Double = {
+    val now = System.nanoTime()
+    val elapsed = now - lastUpdateNanoTime
+    val elapsedMs = elapsed / 1000000.0
+    elapsedMs
+  }
+}

@@ -99,7 +99,7 @@ object Config {
     "gkvmesh.gclock.localAccumulatedDispersionPerMs",
     {
       case Some(x) => x.toDouble
-      case None    => 0.001 // 0.001ms accumulated per ms
+      case None    => 0.0001 // 0.0001ms accumulated per ms or ~8.6 seconds per day
     }
   )
 }
